@@ -1,0 +1,220 @@
+---
+title: 'TypeScript support in Broccoli with Brocfile.ts'
+description: 'Use a Brocfile.ts with Broccoli: ts-node compiles it automatically. Import BrocfileOptions for typed env, handle ESM vs CommonJS imports.'
+---
+
+Broccoli has first-class TypeScript support: name your build file `Brocfile.ts` and Broccoli automatically compiles it through [ts-node](https://www.npmjs.com/package/ts-node) at runtime — no separate build step needed. You gain type checking, IDE autocompletion, and refactoring support for your build pipeline without changing your workflow.
+
+## Prerequisites
+
+You need both `ts-node` and `typescript` installed as development dependencies. If either is missing, Broccoli will throw an informative error pointing to the missing package:
+
+```bash
+npm install --save-dev typescript ts-node
+```
+
+Broccoli checks for these packages automatically when it finds a `.ts` extension on your Brocfile path. The relevant logic in `load_brocfile.ts` is:
+
+```ts
+// Broccoli registers ts-node before requiring Brocfile.ts
+require('ts-node').register();
+const brocfile = require(brocfilePath);
+```
+
+You do not need to call `ts-node` yourself or add it to any scripts.
+
+## The typed function signature
+
+Import `BrocfileOptions` from `broccoli` to type the options argument:
+
+```ts
+// Brocfile.ts
+import { BrocfileOptions } from 'broccoli';
+
+export default (options: BrocfileOptions) => {
+  // options.env is typed as string
+  return 'app';
+};
+```
+
+The `BrocfileOptions` interface is defined in `lib/index.d.ts` and currently contains:
+
+```ts
+export interface BrocfileOptions {
+  /**
+   * Environment setting. Default: development
+   * Set by --environment / --prod / --dev CLI arguments.
+   */
+  env: string;
+}
+```
+
+This means TypeScript will catch typos like `options.evn` at compile time, and your editor will offer autocompletion on the `env` property.
+
+## Importing ES module packages
+
+For packages published as ES modules, use standard TypeScript `import` syntax:
+
+```ts
+import Funnel from 'broccoli-funnel';
+import MergeTrees from 'broccoli-merge-trees';
+import { BrocfileOptions } from 'broccoli';
+
+export default (options: BrocfileOptions) => {
+  const app = new Funnel('app', { destDir: 'assets' });
+  return app;
+};
+```
+
+## Importing CommonJS packages
+
+TypeScript's strict ES module mode does not allow `import Foo from 'foo'` for packages that use `module.exports`. Use the `import foo = require('foo')` syntax instead:
+
+```ts
+import Funnel = require('broccoli-funnel');
+import MergeTrees = require('broccoli-merge-trees');
+```
+
+<Note>
+  This syntax is TypeScript-specific. It reads almost like a regular `import` but compiles to a `require()` call. It is necessary when `esModuleInterop` is not enabled in your `tsconfig.json`, or when the package has no default export.
+</Note>
+
+For the Brocfile export itself with CommonJS-style tooling, use `export =` instead of `export default`:
+
+```ts
+import Funnel = require('broccoli-funnel');
+import { BrocfileOptions } from 'broccoli';
+
+export = (options: BrocfileOptions) => {
+  return new Funnel('app', { destDir: 'appkit' });
+};
+```
+
+## tsconfig requirements
+
+ts-node respects your project's `tsconfig.json`. A minimal configuration that works well with Broccoli:
+
+```json
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2019",
+    "strict": true,
+    "esModuleInterop": true
+  }
+}
+```
+
+| Option | Recommendation | Reason |
+| --- | --- | --- |
+| `module` | `"commonjs"` | Node.js requires CommonJS unless you configure ESM explicitly |
+| `target` | `"es2019"` or later | Enables modern syntax; ts-node compiles on the fly |
+| `esModuleInterop` | `true` | Allows `import Foo from 'foo'` for CommonJS packages; without it, use `import Foo = require('foo')` |
+| `strict` | `true` | Recommended for catching type errors in your build pipeline |
+
+<Tip>
+  If you set `esModuleInterop: true`, you can use the standard `import Foo from 'foo'` syntax for CommonJS packages and avoid the `import Foo = require('foo')` pattern. Both approaches are valid; pick one and be consistent.
+</Tip>
+
+## Full Brocfile.ts example
+
+The following example shows environment branching, typed options, and both import styles:
+
+<Tabs>
+  <Tab title="With esModuleInterop">
+    ```ts
+    // Brocfile.ts  (tsconfig has esModuleInterop: true)
+    import Funnel from 'broccoli-funnel';
+    import MergeTrees from 'broccoli-merge-trees';
+    import { BrocfileOptions } from 'broccoli';
+
+    export default (options: BrocfileOptions) => {
+      const html = new Funnel('app', {
+        files: ['index.html'],
+        annotation: 'HTML entry point',
+      });
+
+      const js = new Funnel('app', {
+        files: ['app.js'],
+        destDir: 'assets',
+        annotation: 'JS bundle',
+      });
+
+      const css = new Funnel('app', {
+        srcDir: 'styles',
+        files: ['app.css'],
+        destDir: 'assets',
+        annotation: 'CSS bundle',
+      });
+
+      let tree: any = new MergeTrees([html, js, css], {
+        annotation: 'Final merge',
+      });
+
+      if (options.env === 'production') {
+        // apply production-only transforms here
+        // tree = minify(tree);
+      }
+
+      return tree;
+    };
+    ```
+  </Tab>
+  <Tab title="Without esModuleInterop">
+    ```ts
+    // Brocfile.ts  (default tsconfig, no esModuleInterop)
+    import Funnel = require('broccoli-funnel');
+    import MergeTrees = require('broccoli-merge-trees');
+    import { BrocfileOptions } from 'broccoli';
+
+    export = (options: BrocfileOptions) => {
+      const html = new Funnel('app', {
+        files: ['index.html'],
+        annotation: 'HTML entry point',
+      });
+
+      const js = new Funnel('app', {
+        files: ['app.js'],
+        destDir: 'assets',
+        annotation: 'JS bundle',
+      });
+
+      const css = new Funnel('app', {
+        srcDir: 'styles',
+        files: ['app.css'],
+        destDir: 'assets',
+        annotation: 'CSS bundle',
+      });
+
+      let tree: any = new MergeTrees([html, js, css]);
+
+      if (options.env === 'production') {
+        // tree = minify(tree);
+      }
+
+      return tree;
+    };
+    ```
+  </Tab>
+</Tabs>
+
+## Coexistence with Brocfile.js
+
+If both `Brocfile.ts` and `Brocfile.js` exist in the same directory, Broccoli's `findup-sync` glob (`Brocfile.{ts,js}`) will find whichever it encounters first. To avoid ambiguity, keep only one. The TypeScript version is strictly a superset of the JavaScript version — migrate by renaming the file and adding type annotations incrementally.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Cannot find module 'ts-node'">
+    Run `npm install --save-dev ts-node`. Broccoli will throw this exact error message if `ts-node` is not installed when it finds a `Brocfile.ts`.
+  </Accordion>
+  <Accordion title="Cannot find module 'typescript'">
+    Run `npm install --save-dev typescript`. Both `ts-node` and `typescript` are required; having one without the other is not sufficient.
+  </Accordion>
+  <Accordion title="Module has no default export">
+    Either add `esModuleInterop: true` to your `tsconfig.json` and use `import Foo from 'foo'`, or switch to `import Foo = require('foo')` syntax. The two styles are equivalent in compiled output.
+  </Accordion>
+  <Accordion title="Type errors in node_modules">
+    If a Broccoli plugin lacks TypeScript types, add a declaration stub: `declare module 'broccoli-some-plugin'` in a `.d.ts` file in your project root.
+  </Accordion>
+</AccordionGroup>

@@ -1,23 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Broccoli",
+  "projectType": "framework",
+  "projectName": "Broccoli",
+  "projectDescription": "A fast, reliable Node.js asset pipeline framework that compiles browser applications using a plugin-based build graph with constant-time rebuilds.",
   "theme": "palm",
-  "colors": {
-    "primary": "#3D7A3D",
-    "light": "#5AAD5A",
-    "dark": "#2A5A2A"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/broccolijs/broccoli"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/broccolijs/broccoli"
-    }
-  },
+  "primaryColor": "#3D7A3D",
+  "lightColor": "#5AAD5A",
+  "darkColor": "#2A5A2A",
   "navigation": {
     "tabs": [
       {
@@ -82,5 +70,34 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Plugin-based build graph with constant-time incremental rebuilds",
+    "Brocfile.js/Brocfile.ts build specification with ES modules and TypeScript support",
+    "Built-in development server with live rebuild on file changes",
+    "Versioned Node API for forward and backward plugin compatibility",
+    "Programmatic Builder API for custom build pipelines",
+    "Multiple watcher backends: watchman, polling, and node fs",
+    "Environment-aware builds (development, production)",
+    "Automatic temporary directory management and cleanup"
+  ],
+  "publicApiSurface": [
+    "Builder",
+    "Builder#build()",
+    "Builder#cleanup()",
+    "Builder#cancel()",
+    "Builder.outputPath",
+    "Builder.watchedSourceNodeWrappers",
+    "Watcher",
+    "Watcher#start()",
+    "Watcher#quit()",
+    "Watcher events: buildStart, buildSuccess, buildFailure, change",
+    "server.serve()",
+    "loadBrocfile()",
+    "getMiddleware()",
+    "WatcherAdapter",
+    "BrocfileOptions",
+    "node.__broccoliFeatures__",
+    "node.__broccoliGetInfo__(builderFeatures)"
+  ]
 }

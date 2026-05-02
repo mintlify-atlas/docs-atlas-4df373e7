@@ -1,0 +1,135 @@
+---
+title: 'Installing Broccoli and the broccoli-cli'
+description: 'Node >= 20.19.* required. Install broccoli as a devDependency and broccoli-cli globally to get the broccoli build and serve commands.'
+---
+
+Broccoli is distributed as two separate npm packages with distinct responsibilities. The `broccoli` package is the build engine — it exposes the `Builder` class, the `Watcher`, and the module loading infrastructure that executes your `Brocfile.js`. The `broccoli-cli` package is the command-line interface that adds the `broccoli` binary to your shell, providing the `broccoli build` and `broccoli serve` subcommands.
+
+Because `broccoli` has no `bin` entry in its `package.json`, installing it alone gives you no CLI. You must also install `broccoli-cli` to run builds from the terminal.
+
+## System requirements
+
+Broccoli requires **Node.js >= 20.19.***. This constraint is declared in the `engines` field of `package.json` and is enforced at install time by recent versions of npm, yarn, and pnpm.
+
+```bash
+node --version   # must be v20.19.0 or later
+```
+
+<Warning>
+  Using a Node version below 20.19.* may allow installation to succeed but will cause runtime errors. Use a version manager such as [nvm](https://github.com/nvm-sh/nvm) or [fnm](https://github.com/Schniz/fnm) to switch Node versions cleanly.
+</Warning>
+
+## Install the broccoli build engine
+
+Install `broccoli` as a development dependency in your project. It should not be a production dependency because it is only needed during asset compilation, not at runtime.
+
+<CodeGroup>
+
+```bash npm
+npm install --save-dev broccoli
+```
+
+```bash yarn
+yarn add --dev broccoli
+```
+
+```bash pnpm
+pnpm add --save-dev broccoli
+```
+
+</CodeGroup>
+
+This adds `broccoli` to the `devDependencies` section of your `package.json` and installs it under `node_modules/broccoli`.
+
+## Install the broccoli-cli command-line interface
+
+`broccoli-cli` provides the `broccoli` binary. Install it globally so it is available in your shell regardless of which project directory you are in.
+
+<CodeGroup>
+
+```bash npm
+npm install --global broccoli-cli
+```
+
+```bash yarn
+yarn global add broccoli-cli
+```
+
+```bash pnpm
+pnpm add --global broccoli-cli
+```
+
+</CodeGroup>
+
+After installation, verify the CLI is available:
+
+```bash
+broccoli --version
+```
+
+<Tip>
+  If you prefer not to install globally, you can run the CLI via your package manager's script runner. Add a script to your `package.json`:
+
+  ```json package.json
+  {
+    "scripts": {
+      "build": "broccoli build dist",
+      "start": "broccoli serve"
+    }
+  }
+  ```
+
+  Then run `npm run build` or `npm run start`. This works because npm places locally installed binaries on the `PATH` when running scripts, but `broccoli-cli` still needs to be available — either installed locally as a dev dependency or globally.
+</Tip>
+
+## What broccoli-cli provides
+
+Once installed, `broccoli-cli` exposes two subcommands:
+
+| Command | Alias | Description |
+|---|---|---|
+| `broccoli build [target]` | `broccoli b` | Compile the build graph and write output to `target` (defaults to `dist/`). |
+| `broccoli serve` | `broccoli s` | Start a development server with file watching and live rebuilds on `localhost:4200`. |
+
+Both commands read your `Brocfile.js` (or `Brocfile.ts`) from the current directory and accept the following shared options:
+
+| Option | Description |
+|---|---|
+| `-e, --environment <env>` | Set the build environment. Defaults to `development`. |
+| `--prod` | Alias for `--environment=production`. |
+| `--dev` | Alias for `--environment=development`. |
+| `--brocfile-path <path>` | Use a Brocfile at a non-default location. |
+| `--cwd <path>` | Set the working directory. |
+
+The `serve` command additionally supports `--port`, `--host`, `--ssl`, `--ssl-key`, `--ssl-cert`, `--no-watch`, and `--watcher`.
+
+## Verify your installation
+
+Create a minimal project to confirm both packages are working:
+
+```bash
+mkdir broccoli-test && cd broccoli-test
+npm init -y
+npm install --save-dev broccoli
+npm install --global broccoli-cli
+mkdir app
+echo "console.log('hello');" > app/main.js
+```
+
+Create a `Brocfile.js`:
+
+```js Brocfile.js
+export default () => 'app';
+```
+
+Run the build:
+
+```bash
+broccoli build dist
+```
+
+If `dist/main.js` exists, both packages are installed and working correctly.
+
+<Info>
+  The `broccoli` package is compiled from TypeScript sources and ships pre-built JavaScript in its `dist/` directory. You do not need TypeScript installed to use it. TypeScript support in your own `Brocfile.ts` requires `ts-node` to be installed separately, which Broccoli will call automatically when it detects a `.ts` Brocfile.
+</Info>

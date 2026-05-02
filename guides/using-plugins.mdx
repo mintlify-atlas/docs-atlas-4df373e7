@@ -1,0 +1,260 @@
+---
+title: 'Using plugins in a Broccoli build pipeline'
+description: 'Find, install, and compose Broccoli plugins in your Brocfile to filter files, rename directories, merge trees, and build complex asset pipelines.'
+---
+
+Broccoli's build system is deliberately minimal on its own — the real power comes from **plugins**. A plugin is a Node package that accepts one or more input trees, applies a transformation (copying, filtering, compiling, concatenating, and so on), and produces an output tree. By composing plugins together in your `Brocfile.js`, you describe a complete build pipeline as a graph of nodes.
+
+## Finding plugins
+
+The plugin ecosystem lives on npm under the [`broccoli-plugin` keyword](https://www.npmjs.org/browse/keyword/broccoli-plugin). Searching there is the fastest way to find what you need:
+
+```bash
+npm search broccoli-plugin
+```
+
+Some commonly used plugins:
+
+| Package | Purpose |
+| --- | --- |
+| [`broccoli-funnel`](https://www.npmjs.com/package/broccoli-funnel) | Filter, rename, and rearrange files within a tree |
+| [`broccoli-merge-trees`](https://www.npmjs.com/package/broccoli-merge-trees) | Merge multiple trees into one output directory |
+| [`broccoli-filter`](https://github.com/broccolijs/broccoli-filter) | Base class for per-file transform plugins |
+| [`broccoli-concat`](https://www.npmjs.com/package/broccoli-concat) | Concatenate files from a tree |
+
+## Installing a plugin
+
+Install plugins as development dependencies:
+
+```bash
+npm install --save-dev broccoli-funnel
+npm install --save-dev broccoli-merge-trees
+```
+
+## Importing a plugin in your Brocfile
+
+<Tabs>
+  <Tab title="ES modules">
+    ```js
+    // Brocfile.js
+    import Funnel from 'broccoli-funnel';
+    import MergeTrees from 'broccoli-merge-trees';
+    ```
+  </Tab>
+  <Tab title="CommonJS">
+    ```js
+    // Brocfile.js
+    const Funnel = require('broccoli-funnel');
+    const MergeTrees = require('broccoli-merge-trees');
+    ```
+  </Tab>
+</Tabs>
+
+## Using broccoli-funnel
+
+[`broccoli-funnel`](https://www.npmjs.com/package/broccoli-funnel) is the most fundamental Broccoli plugin. It copies files from an input tree to an output tree while optionally filtering which files are included and changing where they land.
+
+The following example takes the `app/` directory and re-exports it under an `appkit/` subdirectory:
+
+```js
+// Brocfile.js
+import Funnel from 'broccoli-funnel';
+
+export default () => new Funnel('app', {
+  destDir: 'appkit',
+});
+```
+
+Given an `app/` directory containing `main.js` and `helper.js`, running `broccoli build the-output` produces:
+
+```
+the-output/
+└── appkit/
+    ├── main.js
+    └── helper.js
+```
+
+### Selecting specific files
+
+You can pass a `files` array to pick only the files you want:
+
+```js
+const html = new Funnel('app', {
+  files: ['index.html'],
+  annotation: 'Index file',
+});
+```
+
+### Selecting a subdirectory
+
+Use `srcDir` to scope the input and `destDir` to control output placement:
+
+```js
+const css = new Funnel('app', {
+  srcDir: 'styles',
+  files: ['app.css'],
+  destDir: 'assets',
+  annotation: 'CSS files',
+});
+```
+
+## Using broccoli-merge-trees
+
+[`broccoli-merge-trees`](https://www.npmjs.com/package/broccoli-merge-trees) combines multiple trees into a single output directory. Files from later trees overwrite files with the same path from earlier trees:
+
+```js
+import MergeTrees from 'broccoli-merge-trees';
+
+const appTree = new Funnel('app', { annotation: 'App source' });
+const publicTree = new Funnel('public', { annotation: 'Public assets' });
+
+export default () => new MergeTrees([appTree, publicTree]);
+```
+
+## The annotation option
+
+Every Broccoli plugin accepts an `annotation` option. Annotations appear in build logs, timing reports, and error messages, making it much easier to identify which node in your graph caused a problem or took a long time:
+
+```js
+const js = new Funnel('app', {
+  files: ['app.js'],
+  destDir: 'assets',
+  annotation: 'JS files',       // shows as "Funnel (JS files)" in output
+});
+```
+
+<Tip>
+  Always add `annotation` strings to your plugins, especially when you have multiple instances of the same plugin type. This is the single best thing you can do to make debugging easier.
+</Tip>
+
+## Composing multiple plugins
+
+Plugins are plain objects — you pass the output of one as the input to the next. This is how you chain transformations:
+
+```js
+import Funnel from 'broccoli-funnel';
+import MergeTrees from 'broccoli-merge-trees';
+
+const html = new Funnel('app', {
+  files: ['index.html'],
+  annotation: 'HTML entry point',
+});
+
+const js = new Funnel('app', {
+  files: ['app.js'],
+  destDir: 'assets',
+  annotation: 'JS bundle',
+});
+
+const css = new Funnel('app', {
+  srcDir: 'styles',
+  files: ['app.css'],
+  destDir: 'assets',
+  annotation: 'CSS bundle',
+});
+
+// Pass the result of Funnel into MergeTrees
+const merged = new MergeTrees([html, js, css], {
+  annotation: 'Final merge',
+});
+```
+
+## A complete multi-plugin Brocfile
+
+Here is a full `Brocfile.js` that assembles JS, CSS, HTML, and public assets into a single output tree, with an environment-based optimisation pass:
+
+<Tabs>
+  <Tab title="ES modules">
+    ```js
+    // Brocfile.js
+    import Funnel from 'broccoli-funnel';
+    import MergeTrees from 'broccoli-merge-trees';
+
+    export default (options) => {
+      const html = new Funnel('app', {
+        files: ['index.html'],
+        annotation: 'HTML entry point',
+      });
+
+      const js = new Funnel('app', {
+        files: ['app.js'],
+        destDir: 'assets',
+        annotation: 'JS files',
+      });
+
+      const css = new Funnel('app', {
+        srcDir: 'styles',
+        files: ['app.css'],
+        destDir: 'assets',
+        annotation: 'CSS files',
+      });
+
+      const publicFiles = new Funnel('public', {
+        annotation: 'Public assets',
+      });
+
+      let tree = new MergeTrees([html, js, css, publicFiles], {
+        annotation: 'Merged output',
+      });
+
+      if (options.env === 'production') {
+        // tree = minify(tree);
+      }
+
+      return tree;
+    };
+    ```
+  </Tab>
+  <Tab title="CommonJS">
+    ```js
+    // Brocfile.js
+    const Funnel = require('broccoli-funnel');
+    const MergeTrees = require('broccoli-merge-trees');
+
+    module.exports = (options) => {
+      const html = new Funnel('app', {
+        files: ['index.html'],
+        annotation: 'HTML entry point',
+      });
+
+      const js = new Funnel('app', {
+        files: ['app.js'],
+        destDir: 'assets',
+        annotation: 'JS files',
+      });
+
+      const css = new Funnel('app', {
+        srcDir: 'styles',
+        files: ['app.css'],
+        destDir: 'assets',
+        annotation: 'CSS files',
+      });
+
+      const publicFiles = new Funnel('public', {
+        annotation: 'Public assets',
+      });
+
+      let tree = new MergeTrees([html, js, css, publicFiles], {
+        annotation: 'Merged output',
+      });
+
+      if (options.env === 'production') {
+        // tree = minify(tree);
+      }
+
+      return tree;
+    };
+    ```
+  </Tab>
+</Tabs>
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Brocfile.js reference" icon="file-code" href="/guides/brocfile">
+    Understand the Brocfile export pattern, options hash, and file discovery in detail.
+  </Card>
+  <Card title="Programmatic usage" icon="code" href="/guides/programmatic-usage">
+    Use the Builder API directly to drive builds from your own scripts.
+  </Card>
+</Columns>

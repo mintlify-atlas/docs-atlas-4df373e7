@@ -1,0 +1,203 @@
+---
+title: 'Programmatic usage: Broccoli builds from Node.js'
+description: 'Use Builder directly in Node scripts: build a graph in code, call build(), sync output with TreeSync, cancel builds, and handle BuildErrors.'
+---
+
+The `broccoli` CLI is the most convenient way to build and serve your assets, but sometimes you need tighter control: running Broccoli inside a custom task runner, integrating it into a larger Node.js script, or wiring up your own file-watching loop. In those cases you can import the `Builder` class directly and drive the build process programmatically.
+
+## When to use the programmatic API
+
+Use the CLI (`broccoli build`, `broccoli serve`) for everyday development and CI builds. Reach for the programmatic API when you need to:
+
+- Embed Broccoli in a [Grunt task](https://github.com/embersherpa/grunt-broccoli), a custom script, or another build tool
+- Integrate build output into a larger application server
+- Attach custom event handlers for metrics or logging
+- Implement conditional build pipelines that go beyond what CLI flags allow
+
+## Installing
+
+```bash
+npm install --save-dev broccoli tree-sync
+```
+
+`tree-sync` is a companion library that efficiently synchronises a source directory to a destination directory with minimal file I/O — ideal for copying `builder.outputPath` to your `dist/` folder.
+
+## Constructing a Builder
+
+Import `Builder` from `broccoli` and pass your output node to the constructor:
+
+```js
+const { Builder } = require('broccoli');
+
+// Build up your node graph first
+const Funnel = require('broccoli-funnel');
+const MergeTrees = require('broccoli-merge-trees');
+
+const appRoot = 'app';
+
+const html = new Funnel(appRoot, { files: ['index.html'], annotation: 'Index file' });
+const js   = new Funnel(appRoot, { files: ['app.js'], destDir: '/assets', annotation: 'JS Files' });
+const css  = new Funnel(appRoot, { srcDir: 'styles', files: ['app.css'], destDir: '/assets', annotation: 'CSS Files' });
+const pub  = new Funnel(appRoot, { annotation: 'Public Files' });
+
+const tree = new MergeTrees([html, js, css, pub]);
+
+// Construct the builder with the root of the node graph
+const builder = new Builder(tree);
+```
+
+The `Builder` constructor sets up all required temporary directories immediately. After construction, `builder.outputPath` contains the absolute path to the temporary directory where build artefacts will be written.
+
+## Calling builder.build()
+
+`builder.build()` traverses the node graph, executes every plugin in topological order, and resolves its Promise when all nodes have completed. If any node fails, the Promise is rejected with a `Builder.BuildError` instance:
+
+```js
+builder.build()
+  .then(() => {
+    console.log('Build succeeded. Output at:', builder.outputPath);
+  })
+  .catch((err) => {
+    console.error('Build failed:', err);
+  });
+```
+
+<Note>
+  `builder.build()` will throw synchronously with a `BuilderError` if you call it while a build is already in progress. Wait for the previous Promise to settle before calling `build()` again.
+</Note>
+
+## Syncing output with TreeSync
+
+`builder.outputPath` is a temporary directory managed by Broccoli. To persist build output between runs, use `TreeSync` to copy its contents to a permanent destination:
+
+```js
+const TreeSync = require('tree-sync');
+
+const outputDir = 'dist';
+const outputTree = new TreeSync(builder.outputPath, outputDir);
+
+builder.build()
+  .then(() => outputTree.sync())
+  .then(() => {
+    console.log('Output synced to', outputDir);
+  });
+```
+
+`TreeSync.sync()` is incremental: it only writes files that changed, so it is safe to call on every rebuild.
+
+## Cleaning up with builder.cleanup()
+
+Always call `builder.cleanup()` when you are done. It cancels any in-progress build and removes all temporary directories created by the Builder:
+
+```js
+builder.build()
+  .then(() => outputTree.sync())
+  .then(() => builder.cleanup())
+  .catch((err) => {
+    console.error(err);
+    return builder.cleanup();  // also clean up on error
+  });
+```
+
+The recommended pattern with `async/await` is to place `cleanup()` in a `finally` block so it always runs:
+
+```js
+async function runBuild() {
+  const builder = new Builder(tree);
+  const outputTree = new TreeSync(builder.outputPath, 'dist');
+
+  try {
+    await builder.build();
+    outputTree.sync();
+  } finally {
+    await builder.cleanup();
+  }
+}
+
+runBuild().catch(console.error);
+```
+
+## Cancelling a build
+
+If you need to abort an in-flight build — for example, when a new file change arrives and you want to restart — call `builder.cancel()`. It returns a Promise that resolves once the current (un-cancellable) build step finishes and cleanup is initiated:
+
+```js
+await builder.cancel();
+```
+
+`builder.cleanup()` internally calls `cancel()` first, so you rarely need to call `cancel()` directly.
+
+## Builder events
+
+`Builder` extends `EventEmitter`. It emits two events during each build, once per node in the graph:
+
+| Event | Payload | Description |
+| --- | --- | --- |
+| `beginNode` | `nodeWrapper` | Fired just before a node starts building. |
+| `endNode` | `nodeWrapper` | Fired immediately after a node finishes (or fails). |
+
+Use these events to build timing instrumentation or progress reporting:
+
+```js
+builder.on('beginNode', (nw) => {
+  console.time(nw.label);
+});
+
+builder.on('endNode', (nw) => {
+  console.timeEnd(nw.label);
+});
+```
+
+The `nodeWrapper` argument has a `label` property (e.g., `"Funnel (JS Files)"`) composed from the plugin name and annotation.
+
+## Complete example
+
+The following script mirrors the example from the Broccoli README, with full error handling and cleanup:
+
+```js
+// build-script.js  (CommonJS)
+const { Builder } = require('broccoli');
+const TreeSync = require('tree-sync');
+const Funnel = require('broccoli-funnel');
+const MergeTrees = require('broccoli-merge-trees');
+
+const appRoot = 'app';
+
+const html = new Funnel(appRoot, { files: ['index.html'], annotation: 'Index file' });
+const js   = new Funnel(appRoot, { files: ['app.js'], destDir: '/assets', annotation: 'JS Files' });
+const css  = new Funnel(appRoot, { srcDir: 'styles', files: ['app.css'], destDir: '/assets', annotation: 'CSS Files' });
+const pub  = new Funnel(appRoot, { annotation: 'Public Files' });
+const tree = new MergeTrees([html, js, css, pub]);
+
+const builder = new Builder(tree);
+const outputDir = 'dist';
+const outputTree = new TreeSync(builder.outputPath, outputDir);
+
+builder.build()
+  .then(() => {
+    // Sync the builder's temp output to our dist/ directory
+    return outputTree.sync();
+  })
+  .then(() => {
+    console.log('Build complete. Output written to', outputDir);
+    return builder.cleanup();
+  })
+  .catch((err) => {
+    console.error('Build error:', err);
+    return builder.cleanup();
+  });
+```
+
+## Builder options
+
+The `Builder` constructor accepts an optional second argument:
+
+```js
+const builder = new Builder(tree, {
+  tmpdir: '/path/to/custom/tmp',  // override the temporary directory location; pass null to use system default
+});
+```
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `tmpdir` | `string \| null` | Directory in which Broccoli creates its working temp dirs. Defaults to the system temp directory. |

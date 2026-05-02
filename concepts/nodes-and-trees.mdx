@@ -1,0 +1,211 @@
+---
+title: 'Nodes and trees: source nodes, transform nodes, paths'
+description: 'Source nodes and transform nodes in Broccoli: nodeInfo contracts, outputPath, inputPaths, cachePath, and why the term "tree" is deprecated.'
+keywords: ['nodes', 'trees', 'source node', 'transform node', 'nodeInfo', 'WatchedDir', 'UnwatchedDir', 'outputPath', 'cachePath']
+---
+
+Every object in a Broccoli build pipeline is called a **node**. Nodes are the unit of composition: you connect them by passing one node as the input to another, forming the build graph. Historically these objects were called "trees" — you may still encounter that term in older plugins and documentation — but "node" is the current, preferred name.
+
+## Why "tree" is deprecated
+
+Early Broccoli used the word *tree* to describe both a directory path (a string like `'app'`) and a plugin instance. The dual meaning caused confusion and made the API harder to type and document. The Node API spec formalized the term **node** to refer exclusively to an object implementing `__broccoliFeatures__` and `__broccoliGetInfo__`. Plain strings are still accepted for backward compatibility but are now deprecated in favor of explicit `WatchedDir` nodes.
+
+## The two node types
+
+All nodes have a `nodeType` property (reported via `nodeInfo.nodeType`) with one of two values:
+
+<Tabs>
+  <Tab title="source">
+    A **source node** (`nodeType: "source"`) points to an existing directory on disk. It has no input nodes of its own. Source nodes are the leaves of the build graph.
+
+    They are typically created with `WatchedDir` or `UnwatchedDir` from the [broccoli-source](https://github.com/broccolijs/broccoli-source) package:
+
+    ```js
+    import { WatchedDir, UnwatchedDir } from 'broccoli-source';
+
+    // Rebuilds will trigger whenever a file changes under app/
+    const appDir = new WatchedDir('app');
+
+    // Changes under node_modules/ will NOT trigger a rebuild
+    const vendor = new UnwatchedDir('node_modules/some-lib/dist');
+    ```
+
+    Source node `nodeInfo` properties:
+
+    | Property | Type | Description |
+    |---|---|---|
+    | `nodeType` | `"source"` | Identifies this as a source node |
+    | `sourceDirectory` | `string` | Relative path to the directory on disk |
+    | `watched` | `boolean` | Whether file changes trigger rebuilds |
+    | `name` | `string` | Plugin name (e.g., `"WatchedDir"`) |
+    | `annotation` | `string \| null` | Optional debugging label |
+    | `instantiationStack` | `string` | Stack trace from construction time |
+  </Tab>
+  <Tab title="transform">
+    A **transform node** (`nodeType: "transform"`) reads from one or more input nodes and writes to an output directory. It performs the actual work of your build: compiling, bundling, copying, filtering.
+
+    Transform nodes are typically instances of a [broccoli-plugin](https://github.com/broccolijs/broccoli-plugin) subclass:
+
+    ```js
+    import Funnel from 'broccoli-funnel';
+
+    // Funnel is a transform node: it reads from 'app', writes to outputPath
+    const appJs = new Funnel('app', {
+      include: ['**/*.js'],
+      destDir: 'assets',
+      annotation: 'App JS',
+    });
+    ```
+
+    Transform node `nodeInfo` properties:
+
+    | Property | Type | Description |
+    |---|---|---|
+    | `nodeType` | `"transform"` | Identifies this as a transform node |
+    | `inputNodes` | `Node[]` | Zero or more upstream nodes |
+    | `persistentOutput` | `boolean` | Whether output dir survives between rebuilds |
+    | `needsCache` | `boolean` | Whether a cache dir should be created |
+    | `name` | `string` | Plugin class name (e.g., `"Funnel"`) |
+    | `annotation` | `string \| null` | Optional debugging label |
+    | `instantiationStack` | `string` | Stack trace from construction time |
+  </Tab>
+</Tabs>
+
+## The nodeInfo contract
+
+Every node exposes a `__broccoliGetInfo__(builderFeatures)` method. The Builder calls this during graph construction to retrieve the `nodeInfo` object. This is a versioned API — the Builder and each node negotiate which feature set to use, allowing older plugins and newer versions of Broccoli to coexist in the same project.
+
+<Info>
+Plugin authors rarely interact with `nodeInfo` directly. The [broccoli-plugin](https://github.com/broccolijs/broccoli-plugin) base class handles the low-level API negotiation for you. The properties described here are what `broccoli-plugin` exposes to your `build()` method through `this.inputPaths`, `this.outputPath`, and `this.cachePath`.
+</Info>
+
+Four properties appear on every `nodeInfo`, regardless of `nodeType`:
+
+```ts
+nodeInfo.name              // e.g. "BroccoliMergeTrees"
+nodeInfo.annotation        // e.g. "vendor directories" (or null)
+nodeInfo.instantiationStack // stack trace string for debugging
+nodeInfo.nodeType          // "source" | "transform"
+```
+
+### Debugging with name and annotation
+
+The Builder computes a human-readable `label` for each node wrapper by combining `name` and `annotation`:
+
+```
+Funnel (JS Files)
+Funnel (CSS Files; vendor)
+MergeTrees (final output)
+```
+
+Labels appear in error messages, Heimdall profiling output, and debug logs. When you have multiple instances of the same plugin, the annotation is the primary way to tell them apart. Always provide an `annotation` option when constructing plugin instances that will be hard to distinguish otherwise.
+
+## Path properties
+
+Once the Builder runs `setupTmpDirs()`, each node wrapper gains concrete path properties. These are the paths your plugin's `build()` method reads from and writes to:
+
+<AccordionGroup>
+  <Accordion title="outputPath">
+    A path to the directory where this node should write its output. For transform nodes, this is a temporary directory created by the Builder (e.g., `out-003-funnel_app_js/`). For source nodes, `outputPath` is simply the `sourceDirectory` itself — there is no copying involved.
+
+    Your plugin must write all output files here. The directory is empty at the start of each build unless `persistentOutput: true` is set.
+
+    ```ts
+    // In your plugin's build() method:
+    fs.writeFileSync(path.join(this.outputPath, 'result.js'), compiledCode);
+    ```
+  </Accordion>
+  <Accordion title="inputPaths">
+    An array of directory paths corresponding to `nodeInfo.inputNodes`. Each element is the `outputPath` of the corresponding upstream node. Your plugin may read from these paths but must never write to them.
+
+    ```ts
+    // Single-input plugin
+    const sourceFiles = fs.readdirSync(this.inputPaths[0]);
+
+    // Multi-input plugin (e.g. MergeTrees)
+    for (const inputPath of this.inputPaths) {
+      // read from each input directory
+    }
+    ```
+  </Accordion>
+  <Accordion title="cachePath">
+    A path to a directory for storing data that should persist across rebuilds within the same Broccoli server session. Unlike `outputPath`, this directory is never cleared between builds. Useful for incremental compilation caches, checksums, or any state that speeds up subsequent builds.
+
+    A node can opt out of having a cache directory by setting `needsCache: false` in its `nodeInfo`. When `needsCache` is false, `this.cachePath` will be undefined and no directory is created.
+
+    ```ts
+    // Store a cache manifest between builds
+    const cacheFile = path.join(this.cachePath, 'manifest.json');
+    if (fs.existsSync(cacheFile)) {
+      const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+      // use cached data to skip re-processing unchanged files
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## String nodes (deprecated)
+
+For historical reasons, plain strings are accepted wherever a node is expected. The string is treated as the path to a watched source directory:
+
+```js
+// Deprecated — equivalent to new WatchedDir('app')
+export default () => 'app';
+```
+
+The Builder converts string nodes to `WatchedDir` instances internally during `makeNodeWrapper`:
+
+```ts
+// builder.ts
+if (typeof node === 'string') {
+  node = new WatchedDir(node, { annotation: 'string node' });
+}
+```
+
+<Warning>
+String nodes are deprecated. They provide no `instantiationStack`, so when errors occur the Builder cannot report where the string node was defined. Use `WatchedDir` or `UnwatchedDir` explicitly for better debugging output.
+</Warning>
+
+## Watched vs. unwatched source directories
+
+The `watched` flag on a source node controls whether Broccoli's file system watcher monitors that directory for changes.
+
+| | `WatchedDir` | `UnwatchedDir` |
+|---|---|---|
+| Triggers rebuilds | Yes | No |
+| Still read during builds | Yes | Yes |
+| Collected into `watchedPaths` | Yes | No |
+| Best for | Your own source files | Large vendor trees |
+
+Setting `watched: false` via `UnwatchedDir` is a meaningful performance optimization for large directories (like `node_modules`) that change infrequently. Broccoli will still read from them during builds, but will not set up filesystem watch subscriptions for them.
+
+## The persistentOutput and needsCache flags
+
+These two `nodeInfo` flags let plugins fine-tune how the Builder manages their directories:
+
+```ts
+// Example nodeInfo from a broccoli-plugin subclass
+{
+  persistentOutput: true,  // don't wipe outputPath between rebuilds
+  needsCache: false,       // don't create a cachePath at all
+}
+```
+
+**`persistentOutput: false` (default):** Between rebuilds, the Builder deletes `outputPath` and recreates it as an empty directory. The plugin starts each build with a clean slate.
+
+**`persistentOutput: true`:** The Builder leaves `outputPath` untouched between rebuilds. The plugin is responsible for managing stale output files. This is useful for plugins that perform incremental writes.
+
+**`needsCache: false`:** No `cachePath` directory is created. Use this when your plugin has no need for cross-rebuild state to avoid creating unnecessary temporary directories.
+
+**`needsCache: true` (default):** A `cachePath` directory is created and made available as `this.cachePath`. It persists for the lifetime of the Builder (one `broccoli build` run, or one `broccoli serve` session).
+
+## Further reading
+
+<Columns cols={2}>
+  <Card title="Build graph" icon="sitemap" href="/concepts/build-graph">
+    See how nodes are assembled into a DAG and traversed by the Builder.
+  </Card>
+  <Card title="Plugins" icon="puzzle-piece" href="/concepts/plugins">
+    Learn how to write your own transform nodes using broccoli-plugin.
+  </Card>
+</Columns>

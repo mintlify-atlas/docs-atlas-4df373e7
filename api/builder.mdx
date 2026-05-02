@@ -1,0 +1,201 @@
+---
+title: "Builder – Broccoli Build Graph Executor"
+description: "Reference for the Builder class: constructor, build(), cleanup(), cancel(), outputPath, error classes, and beginNode/endNode lifecycle events."
+---
+
+The `Builder` class is the core of every Broccoli build. It accepts your output node, traverses the entire node graph, allocates temporary directories for each transform, and executes each node in topological order. You construct one `Builder`, call `build()` as many times as needed, then call `cleanup()` to remove all temporary directories.
+
+```ts
+const broccoli = require('broccoli');
+const { Builder } = broccoli;
+```
+
+## Constructor
+
+```ts
+new Builder(outputNode: Node, options?: BuilderOptions)
+```
+
+<ParamField path="outputNode" type="Node" required>
+  The root node of your build graph. Every node reachable from `outputNode` will
+  be included in the build. Plain strings are automatically wrapped in a
+  `WatchedDir` source node.
+</ParamField>
+
+<ParamField path="options.tmpdir" type="string | null">
+  Path to the directory inside which Broccoli creates its per-build temporary
+  working tree (e.g. `out-001-funnel/`, `cache-002-merge_trees/`). When `null`
+  or omitted, the OS default temp directory is used. Set this if you need
+  deterministic temp locations or want temp files on a specific filesystem.
+</ParamField>
+
+<Note>
+  The constructor is **synchronous** but performs several side-effecting setup
+  steps: it walks the node graph, validates all watched source directories, and
+  calls `setup()` on every node. If setup fails, all temporary directories are
+  cleaned up automatically and the error is re-thrown as a `NodeSetupError`.
+</Note>
+
+## Public Methods
+
+### `build()`
+
+```ts
+async build(): Promise<void>
+```
+
+Triggers a full (re)build of the node graph. Nodes are executed in topological
+order — inputs before the transforms that consume them. Each node receives a
+`beginNode` event before execution and an `endNode` event after (whether it
+succeeds or fails).
+
+Returns a `Promise` that resolves when the build succeeds. On failure the
+promise is **rejected** with a `Builder.BuildError` instance. The method never
+throws synchronously and never rejects with any type other than `BuildError`.
+
+<Warning>
+  Calling `build()` while a build is already in progress throws a
+  `BuilderError` immediately. Wait for the current `build()` promise to settle
+  before scheduling another build, or use a `Watcher` which handles this for
+  you.
+</Warning>
+
+### `cleanup()`
+
+```ts
+async cleanup(): Promise<void>
+```
+
+Destructor-like method. Cancels any in-progress build (waiting for the current
+atomic unit of work to finish), then removes the entire temporary directory tree
+that was created in the constructor. Always call this in a `finally` block to
+avoid leaving temp files on disk.
+
+### `cancel()`
+
+```ts
+async cancel(): Promise<void>
+```
+
+Requests cancellation of the active build. The build will stop after the
+currently running node wrapper finishes its work. Resolves when the build has
+fully stopped. If no build is in progress this is a no-op.
+
+## Public Properties
+
+<ResponseField name="outputPath" type="string">
+  Absolute path to the directory that will contain the build's final output
+  after each successful `build()` call. Populated during construction from
+  `outputNodeWrapper.outputPath`.
+</ResponseField>
+
+<ResponseField name="buildId" type="number">
+  Monotonically increasing counter, starting at `0` and incremented at the
+  beginning of every `build()` call. Useful for correlating `beginNode` /
+  `endNode` events to a specific build run.
+</ResponseField>
+
+<ResponseField name="nodeWrappers" type="NodeWrapper[]">
+  Flat array of every `NodeWrapper` in the graph, ordered topologically (inputs
+  before the transforms that depend on them). This is a convenience accessor
+  that spreads the internal `Map` on each access.
+</ResponseField>
+
+<ResponseField name="watchedSourceNodeWrappers" type="SourceNodeWrapper[]">
+  Subset of `nodeWrappers` containing only the **watched** source nodes. The
+  `Watcher` passes this list to the `WatcherAdapter` so it knows which
+  directories to monitor for file changes.
+</ResponseField>
+
+## Static Error Classes
+
+Broccoli surfaces four error types as static properties on `Builder` so you can
+import them without reaching into sub-modules.
+
+<ResponseField name="Builder.BuilderError" type="typeof BuilderError">
+  General-purpose error thrown for misuse of the Builder API (e.g. starting a
+  second build while one is running, or a cycle detected in the node graph).
+</ResponseField>
+
+<ResponseField name="Builder.NodeSetupError" type="typeof NodeSetupError">
+  Thrown when a node's `setup()` call fails. Wraps the original error and adds
+  the node's label and instantiation stack to the message to help locate the
+  offending plugin.
+</ResponseField>
+
+<ResponseField name="Builder.BuildError" type="typeof BuildError">
+  Thrown when a node's `build()` call fails at runtime. Contains a reference to
+  the underlying error and the `NodeWrapper` that caused it.
+</ResponseField>
+
+<ResponseField name="Builder.InvalidNodeError" type="typeof InvalidNodeError">
+  Re-exported from `broccoli-node-info`. Thrown when a value that is not a
+  valid Broccoli node is encountered in the graph. The error message includes
+  the parent node's label and instantiation stack.
+</ResponseField>
+
+## Events
+
+The `Builder` extends `EventEmitter` and emits two events during every build.
+
+| Event | Payload | Description |
+|---|---|---|
+| `beginNode` | `NodeWrapper` | Fired immediately before a node wrapper's `build()` is called. |
+| `endNode` | `NodeWrapper` | Fired after a node wrapper's `build()` completes (success or failure). |
+
+Both events are also used internally to drive the Heimdall performance-profiling
+tree, so removing all listeners for these events will break build timings.
+
+## Full Usage Example
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```ts
+    import broccoli = require('broccoli');
+    import Funnel = require('broccoli-funnel');
+
+    const { Builder } = broccoli;
+
+    const app = new Funnel('src', { destDir: 'app' });
+    const builder = new Builder(app, { tmpdir: '/tmp/my-app-build' });
+
+    builder.on('beginNode', (nw) => console.log('building', nw.label));
+    builder.on('endNode',   (nw) => console.log('done',     nw.label));
+
+    try {
+      await builder.build();
+      console.log('Output at:', builder.outputPath);
+    } catch (err) {
+      if (err instanceof Builder.BuildError) {
+        console.error('Build failed in node:', err.nodeWrapper.label);
+        console.error(err.originalError);
+      }
+    } finally {
+      await builder.cleanup();
+    }
+    ```
+  </Tab>
+  <Tab title="JavaScript">
+    ```js
+    const broccoli = require('broccoli');
+    const Funnel = require('broccoli-funnel');
+
+    const { Builder } = broccoli;
+
+    const app = new Funnel('src', { destDir: 'app' });
+    const builder = new Builder(app, { tmpdir: '/tmp/my-app-build' });
+
+    builder.on('beginNode', (nw) => console.log('building', nw.label));
+    builder.on('endNode',   (nw) => console.log('done',     nw.label));
+
+    builder.build()
+      .then(() => console.log('Output at:', builder.outputPath))
+      .catch((err) => {
+        if (err instanceof Builder.BuildError) {
+          console.error('Build failed in node:', err.nodeWrapper.label);
+        }
+      })
+      .finally(() => builder.cleanup());
+    ```
+  </Tab>
+</Tabs>

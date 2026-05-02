@@ -1,0 +1,207 @@
+---
+title: 'Broccoli Plugins: Build() Lifecycle and Ecosystem'
+description: 'Broccoli plugins subclass broccoli-plugin and implement build(). Learn the lifecycle, annotation, and how to discover community plugins on npm.'
+keywords: ['plugins', 'broccoli-plugin', 'build method', 'broccoli-funnel', 'broccoli-merge-trees', 'broccoli-filter', 'npm', 'annotation']
+---
+
+A Broccoli plugin is a JavaScript class that extends [broccoli-plugin](https://github.com/broccolijs/broccoli-plugin) and implements a single `build()` method. When the `Builder` executes your pipeline, it calls `build()` on each transform node in topological order, passing it access to input directories and an empty output directory. Your plugin reads from inputs, performs its transformation, and writes results to the output.
+
+## What a plugin is
+
+Every plugin is a **transform node** in the build graph. Instantiating a plugin does not run any build work — it merely describes a transformation and records which upstream nodes feed into it. The actual work happens when `builder.build()` is called.
+
+```js
+import Funnel from 'broccoli-funnel';
+
+// This line describes a transformation. No files are read or written yet.
+const appJs = new Funnel('app', {
+  include: ['**/*.js'],
+  destDir: 'assets',
+  annotation: 'App JS files',
+});
+```
+
+Under the hood, `Funnel` (and every plugin built on `broccoli-plugin`) exposes a `__broccoliGetInfo__()` method that returns a `nodeInfo` object. The Builder uses this to register the plugin into the graph, allocate its temp directories, and wire up `inputPaths`, `outputPath`, and `cachePath`.
+
+## The build() method lifecycle
+
+When the Builder reaches a plugin node during a build pass, it calls `callbackObject.build()`. Inside your plugin subclass, this maps to `this.build()`. The sequence is:
+
+<Steps>
+  <Step title="setup() is called once">
+    Before the first build, the Builder calls `nodeInfo.setup()` with the resolved `inputPaths`, `outputPath`, and `cachePath`. The `broccoli-plugin` base class stores these as `this.inputPaths`, `this.outputPath`, and `this.cachePath` so your `build()` method can access them directly.
+  </Step>
+  <Step title="outputPath is cleared (unless persistentOutput)">
+    If `persistentOutput` is `false` (the default), the Builder deletes the contents of `outputPath` and recreates it as an empty directory. This ensures each build starts from a clean slate.
+  </Step>
+  <Step title="build() is called">
+    Your plugin's `build()` method is invoked. It may be synchronous or return a `Promise`. Read source files from `this.inputPaths[0]` (or whichever input indices you need), perform your transformation, and write the results to `this.outputPath`.
+  </Step>
+  <Step title="revision is incremented">
+    After a successful build, the node's internal revision counter increments. Downstream nodes compare their inputs' revisions on the next rebuild to decide whether they need to re-run.
+  </Step>
+</Steps>
+
+### Writing a minimal plugin
+
+```js
+const Plugin = require('broccoli-plugin');
+const fs = require('fs');
+const path = require('path');
+
+class UppercasePlugin extends Plugin {
+  constructor(inputNode, options = {}) {
+    super([inputNode], options);
+  }
+
+  build() {
+    const inputFiles = fs.readdirSync(this.inputPaths[0]);
+    for (const file of inputFiles) {
+      const content = fs.readFileSync(path.join(this.inputPaths[0], file), 'utf8');
+      fs.writeFileSync(
+        path.join(this.outputPath, file),
+        content.toUpperCase()
+      );
+    }
+  }
+}
+
+module.exports = UppercasePlugin;
+```
+
+The `build()` method can also return a `Promise` for asynchronous work:
+
+```js
+async build() {
+  const files = fs.readdirSync(this.inputPaths[0]);
+  await Promise.all(files.map(file => this.processFile(file)));
+}
+```
+
+## Plugin annotation for debugging
+
+When you have multiple instances of the same plugin in your graph, the `annotation` option is essential for telling them apart in error messages and Heimdall profiling output. The Builder computes a label for each node as `PluginName (annotation)`:
+
+```js
+const vendorCss = new Funnel('node_modules/bootstrap/dist', {
+  srcDir: 'css',
+  files: ['bootstrap.min.css'],
+  destDir: 'assets',
+  annotation: 'Bootstrap CSS',  // label: "Funnel (Bootstrap CSS)"
+});
+
+const appCss = new Funnel('app/styles', {
+  files: ['app.css'],
+  destDir: 'assets',
+  annotation: 'App CSS',        // label: "Funnel (App CSS)"
+});
+```
+
+Without annotations, both nodes would appear as `"Funnel"` in build logs and error output, making it hard to identify which step failed or was slow.
+
+## Using plugins in a Brocfile.js
+
+The following `Brocfile.js` copies the `app/` directory to `appkit/` in the output using `broccoli-funnel`:
+
+```js
+// Brocfile.js (ESM)
+import Funnel from 'broccoli-funnel';
+
+export default () => new Funnel('app', {
+  destDir: 'appkit',
+});
+```
+
+With the file tree:
+
+```
+app/
+  main.js
+  helper.js
+Brocfile.js
+```
+
+Running `broccoli build the-output` produces:
+
+```
+the-output/
+  appkit/
+    main.js
+    helper.js
+```
+
+Install plugins as dev dependencies before importing them:
+
+```bash
+npm install --save-dev broccoli-funnel
+```
+
+## Common plugins
+
+<Columns cols={2}>
+  <Card title="broccoli-funnel" icon="filter" href="https://www.npmjs.com/package/broccoli-funnel">
+    Filter, rename, and relocate files from an input tree. The most commonly used plugin — handles includes, excludes, `destDir`, and `srcDir` remapping.
+  </Card>
+  <Card title="broccoli-merge-trees" icon="code-merge" href="https://www.npmjs.com/package/broccoli-merge-trees">
+    Merge multiple input trees into a single output directory. Supports an `overwrite` option for resolving file conflicts.
+  </Card>
+  <Card title="broccoli-filter" icon="file-code" href="https://github.com/broccolijs/broccoli-filter">
+    Base class for plugins that process files one at a time (e.g., transpilers, minifiers). Handles caching and pass-through automatically.
+  </Card>
+  <Card title="broccoli-caching-writer" icon="database" href="https://github.com/rjackson/broccoli-caching-writer">
+    Base class that only calls your build function when input files change. Useful for expensive operations like bundle generation.
+  </Card>
+</Columns>
+
+## How plugins fit into the build graph
+
+A plugin's constructor receives one or more input nodes and passes them to `super([inputNode1, inputNode2, ...])`. This is how edges in the build graph are formed. The `Builder` reads `nodeInfo.inputNodes` to wire each plugin's `inputPaths` to the `outputPath` values of its upstream nodes.
+
+```
+WatchedDir('app')          WatchedDir('app/styles')
+        │                          │
+        ▼                          ▼
+  Funnel (App JS)           Funnel (App CSS)
+        │                          │
+        └────────────┬─────────────┘
+                     ▼
+              MergeTrees ([js, css])
+                     │
+                     ▼
+              final outputPath
+```
+
+Each arrow represents an `inputNode` reference. When you pass a node as input to another, you are adding a directed edge in this graph.
+
+## Finding plugins on npm
+
+Plugins follow the `broccoli-plugin` keyword convention on npm. Search for all plugins at:
+
+```
+https://www.npmjs.com/browse/keyword/broccoli-plugin
+```
+
+When evaluating a plugin:
+
+<AccordionGroup>
+  <Accordion title="Check that it extends broccoli-plugin">
+    A well-maintained plugin will declare `broccoli-plugin` as a dependency and call `super(inputNodes, options)` in its constructor. This ensures it works with the versioned node API and receives correct `inputPaths`, `outputPath`, and `cachePath` values.
+  </Accordion>
+  <Accordion title="Look for the annotation option">
+    Plugins that pass `options` through to `super()` will automatically support the `annotation` option. If a plugin does not forward options, you may need to fork it or open a PR.
+  </Accordion>
+  <Accordion title="Check for persistentOutput and needsCache support">
+    Incremental plugins that manage their own output (like `broccoli-filter` subclasses) will set `persistentOutput: true` and use `cachePath` to store checksums between builds. This is the pattern for achieving fast incremental rebuilds on large codebases.
+  </Accordion>
+</AccordionGroup>
+
+## Further reading
+
+<Columns cols={2}>
+  <Card title="Nodes and trees" icon="diagram-project" href="/concepts/nodes-and-trees">
+    Understand the nodeInfo contract, path properties, and node types.
+  </Card>
+  <Card title="Build graph" icon="sitemap" href="/concepts/build-graph">
+    See how plugins compose into a DAG traversed by the Builder.
+  </Card>
+</Columns>

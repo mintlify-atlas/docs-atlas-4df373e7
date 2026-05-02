@@ -1,0 +1,185 @@
+---
+title: "BrocfileOptions – build environment interface"
+description: "BrocfileOptions: the env string Broccoli passes to your Brocfile. Covers the CLI flags that set it and JS/TS usage examples."
+---
+
+`BrocfileOptions` is the options object that Broccoli passes to your Brocfile
+function on every build invocation. It carries contextual information about the
+current build environment so your Brocfile can activate different plugins,
+toggle optimisations, or load different configuration files depending on whether
+you are building for development, production, testing, or any other environment
+you define. The type is exported directly from the `broccoli` package.
+
+## Interface Definition
+
+```ts
+// broccoli/lib/index.d.ts
+export interface BrocfileOptions {
+  env: string;
+}
+```
+
+## Properties
+
+<ParamField path="env" type="string" required>
+  A string identifying the current build environment. Set by the CLI and
+  forwarded verbatim to your Brocfile. **Default: `"development"`**.
+
+  Common values are `"development"`, `"production"`, and `"test"`, but you can
+  pass any string via `--environment`.
+</ParamField>
+
+## Setting `env` from the CLI
+
+There are three ways to control `env` at build time:
+
+| CLI flag | Resulting `env` value |
+|---|---|
+| _(none)_ | `"development"` |
+| `-e development` / `--environment=development` | `"development"` |
+| `-e production` / `--environment=production` | `"production"` |
+| `--dev` | `"development"` (alias) |
+| `--prod` | `"production"` (alias) |
+| `-e test` | `"test"` (or any custom string) |
+
+<Note>
+  `--prod` and `--dev` are convenience aliases. When both `--prod` and
+  `--environment` are passed, `--prod` takes precedence and sets `env` to
+  `"production"`. The same applies to `--dev`.
+</Note>
+
+```bash
+# Development build (default)
+broccoli build
+
+# Production build — equivalent ways:
+broccoli build --prod
+broccoli build --environment=production
+broccoli build -e production
+
+# Custom environment
+broccoli build -e staging
+
+# Works identically with serve:
+broccoli serve --prod
+```
+
+## TypeScript Import
+
+```ts
+import type { BrocfileOptions } from 'broccoli';
+```
+
+<Tip>
+  If your editor cannot resolve the type from `'broccoli'` directly, import it
+  from the declaration file path instead:
+
+  ```ts
+  import type { BrocfileOptions } from 'broccoli/lib/index';
+  ```
+</Tip>
+
+## Brocfile Examples
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```ts
+    // Brocfile.ts
+    import type { BrocfileOptions } from 'broccoli';
+    import Funnel from 'broccoli-funnel';
+    import UglifyJS from 'broccoli-uglify-sourcemap';
+    import MergeTrees from 'broccoli-merge-trees';
+
+    export default function (options: BrocfileOptions) {
+      const { env } = options;
+
+      const scripts = new Funnel('src', {
+        include: ['**/*.js'],
+        destDir: 'assets',
+      });
+
+      // Only minify in production
+      const optimisedScripts =
+        env === 'production' ? new UglifyJS(scripts) : scripts;
+
+      const styles = new Funnel('styles', { destDir: 'assets' });
+
+      return new MergeTrees([optimisedScripts, styles]);
+    }
+    ```
+  </Tab>
+  <Tab title="JavaScript">
+    ```js
+    // Brocfile.js
+    const Funnel = require('broccoli-funnel');
+    const UglifyJS = require('broccoli-uglify-sourcemap');
+    const MergeTrees = require('broccoli-merge-trees');
+
+    module.exports = function (options) {
+      const { env } = options;
+
+      const scripts = new Funnel('src', {
+        include: ['**/*.js'],
+        destDir: 'assets',
+      });
+
+      // Only minify in production
+      const optimisedScripts =
+        env === 'production' ? new UglifyJS(scripts) : scripts;
+
+      const styles = new Funnel('styles', { destDir: 'assets' });
+
+      return new MergeTrees([optimisedScripts, styles]);
+    };
+    ```
+  </Tab>
+</Tabs>
+
+## Multi-Environment Example
+
+For projects with more than two environments, a lookup table is often cleaner
+than a chain of `if` statements.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```ts
+    // Brocfile.ts
+    import type { BrocfileOptions } from 'broccoli';
+    import Funnel from 'broccoli-funnel';
+
+    const CONFIG: Record<string, { minify: boolean; sourcemaps: boolean }> = {
+      development: { minify: false, sourcemaps: true  },
+      test:        { minify: false, sourcemaps: true  },
+      production:  { minify: true,  sourcemaps: false },
+      staging:     { minify: true,  sourcemaps: true  },
+    };
+
+    export default function ({ env }: BrocfileOptions) {
+      const config = CONFIG[env] ?? CONFIG.development;
+      console.log(`Building for environment: ${env}`, config);
+
+      return new Funnel('src');
+    }
+    ```
+  </Tab>
+  <Tab title="JavaScript">
+    ```js
+    // Brocfile.js
+    const Funnel = require('broccoli-funnel');
+
+    const CONFIG = {
+      development: { minify: false, sourcemaps: true  },
+      test:        { minify: false, sourcemaps: true  },
+      production:  { minify: true,  sourcemaps: false },
+      staging:     { minify: true,  sourcemaps: true  },
+    };
+
+    module.exports = function ({ env }) {
+      const config = CONFIG[env] ?? CONFIG.development;
+      console.log(`Building for environment: ${env}`, config);
+
+      return new Funnel('src');
+    };
+    ```
+  </Tab>
+</Tabs>

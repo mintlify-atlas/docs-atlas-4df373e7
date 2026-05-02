@@ -1,0 +1,178 @@
+---
+title: "Watcher – File-Change Build Orchestrator"
+description: "Watcher class reference: constructor, start(), quit(), currentBuild, and all events — buildStart, buildSuccess, buildFailure, change, quitEnd."
+---
+
+The `Watcher` class bridges the file system and the `Builder`. It delegates
+actual I/O to a `WatcherAdapter` (backed by the `sane` package) and handles all
+Broccoli-level concerns: debouncing rapid file changes, scheduling rebuilds,
+surfacing build success or failure events, and coordinating a clean shutdown.
+Most applications do not construct a `Watcher` directly — `broccoli serve` and
+`broccoli build --watch` do it automatically — but direct use is straightforward
+when you need programmatic control.
+
+```ts
+import broccoli = require('broccoli');
+const { Watcher } = broccoli;
+```
+
+## Constructor
+
+```ts
+new Watcher(
+  builder: Builder,
+  watchedNodes: SourceNodeWrapper[],
+  options?: WatcherOptions
+)
+```
+
+<ParamField path="builder" type="Builder" required>
+  A fully constructed `Builder` instance. The `Watcher` calls
+  `builder.build()` on the initial watch start and on every subsequent rebuild
+  triggered by file-system changes.
+</ParamField>
+
+<ParamField path="watchedNodes" type="SourceNodeWrapper[]" required>
+  The list of watched source-node wrappers to monitor. In practice you pass
+  `builder.watchedSourceNodeWrappers` here so the watcher observes exactly the
+  directories that your build graph declared.
+</ParamField>
+
+<ParamField path="options.debounce" type="number">
+  Milliseconds to wait after the first file-change event before triggering a
+  rebuild. Coalesces multiple rapid changes into a single build. **Default:
+  `100`**.
+</ParamField>
+
+<ParamField path="options.watcherAdapter" type="WatcherAdapter">
+  Provide a custom `WatcherAdapter` instance to replace the default sane-backed
+  adapter. Useful for testing or for integrating alternative file-watching
+  backends.
+</ParamField>
+
+<ParamField path="options.saneOptions" type="sane.Options">
+  Options forwarded verbatim to the underlying `sane` watcher. Controls the
+  watcher backend (`poll`, `watchman`, or `node`) and other sane-specific
+  settings. Populated automatically by the CLI via `WatchDetector`.
+</ParamField>
+
+<ParamField path="options.ignored" type="string[]">
+  List of absolute paths that should **not** be watched even if they are nested
+  beneath a watched directory. Useful for ignoring generated output directories
+  that happen to sit inside a source root.
+</ParamField>
+
+## Public Methods
+
+### `start()`
+
+```ts
+start(): Promise<void>
+```
+
+Starts the watcher: initialises the underlying `WatcherAdapter`, waits for it
+to become ready, fires the initial build, and then enters the watch loop.
+Returns a `Promise` that settles only when the watcher is fully stopped (i.e.
+after `quit()` resolves). You can `await` it to keep the process alive for the
+duration of the watch session.
+
+<Warning>
+  `start()` must be called **at most once** per `Watcher` instance. Calling it
+  a second time throws immediately.
+</Warning>
+
+### `quit()`
+
+```ts
+quit(): Promise<void>
+```
+
+Initiates a graceful shutdown: stops the underlying file watcher, waits for any
+in-progress build to complete, then emits `quitEnd`. Returns a `Promise` that
+resolves when the shutdown is complete. Safe to call from a `SIGINT` / `SIGTERM`
+handler. Subsequent calls while quitting is already in progress are no-ops that
+return the same promise.
+
+## Public Properties
+
+<ResponseField name="currentBuild" type="Promise<void>">
+  A promise that represents the **currently active build**. Resolves on build
+  success, rejects on build failure. The reference is updated before each new
+  build begins. Chaining `.then()` / `.catch()` on this property gives you
+  build-level notifications without having to listen to events.
+</ResponseField>
+
+## Events
+
+The `Watcher` extends `EventEmitter` and emits the following events.
+
+| Event | Payload | Description |
+|---|---|---|
+| `buildStart` | — | Fired immediately before `builder.build()` is called, on both the initial build and every rebuild. |
+| `buildSuccess` | `{ filePath?: string }` | Fired after a successful build. `filePath` is the changed file that triggered the rebuild (`undefined` for the initial build), added for ember-cli compatibility. |
+| `buildFailure` | `Error` | Fired when `builder.build()` rejects. The payload is the `Builder.BuildError` instance. |
+| `change` | `(event, filePath, root)` | Forwarded from the `WatcherAdapter` when a source file changes and the watcher is ready. |
+| `debounce` | — | Fired at the start of the debounce timer, before the rebuild is actually scheduled. |
+| `quitStart` | — | Fired at the beginning of the shutdown sequence. |
+| `quitEnd` | — | Fired after the watcher has fully stopped and the last build has settled. |
+
+## Usage Example
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```ts
+    import broccoli = require('broccoli');
+    import MergeTrees = require('broccoli-merge-trees');
+
+    const { Builder, Watcher } = broccoli;
+
+    const tree = new MergeTrees(['src', 'vendor']);
+    const builder = new Builder(tree);
+
+    const watcher = new Watcher(builder, builder.watchedSourceNodeWrappers, {
+      debounce: 200,
+      saneOptions: { poll: false, watchman: true },
+      ignored: ['/my-project/dist'],
+    });
+
+    watcher.on('buildStart',   ()    => console.log('Building…'));
+    watcher.on('buildSuccess', ()    => console.log('Build OK  –', builder.outputPath));
+    watcher.on('buildFailure', (err) => console.error('Build failed:', err.message));
+    watcher.on('quitEnd',      ()    => console.log('Watcher stopped.'));
+
+    // Keep process alive until Ctrl-C
+    process.on('SIGINT', () => watcher.quit());
+
+    await watcher.start();
+    ```
+  </Tab>
+  <Tab title="JavaScript">
+    ```js
+    const broccoli = require('broccoli');
+    const MergeTrees = require('broccoli-merge-trees');
+
+    const { Builder, Watcher } = broccoli;
+
+    const tree = new MergeTrees(['src', 'vendor']);
+    const builder = new Builder(tree);
+
+    const watcher = new Watcher(builder, builder.watchedSourceNodeWrappers, {
+      debounce: 200,
+      saneOptions: { poll: false, watchman: true },
+      ignored: ['/my-project/dist'],
+    });
+
+    watcher.on('buildStart',   ()    => console.log('Building…'));
+    watcher.on('buildSuccess', ()    => console.log('Build OK  –', builder.outputPath));
+    watcher.on('buildFailure', (err) => console.error('Build failed:', err.message));
+    watcher.on('quitEnd',      ()    => console.log('Watcher stopped.'));
+
+    process.on('SIGINT', () => watcher.quit());
+
+    watcher.start().catch((err) => {
+      console.error('Watcher error:', err);
+      process.exit(1);
+    });
+    ```
+  </Tab>
+</Tabs>

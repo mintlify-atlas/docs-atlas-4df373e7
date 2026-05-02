@@ -1,0 +1,217 @@
+---
+title: "CLI Options – Broccoli Command-Line Reference"
+description: "All broccoli CLI flags for serve and build: port, host, SSL, environment, watcher backend, output path, and their default values."
+---
+
+Broccoli ships a single executable with two subcommands: `serve` (alias `s`)
+and `build` (alias `b`). The CLI is implemented in `lib/cli.ts` using
+[Commander](https://github.com/tj/commander.js) and delegates to the `Builder`,
+`Watcher`, and `Server` APIs documented elsewhere in this reference. Run
+`broccoli --help` at any time for a concise summary.
+
+```bash
+broccoli <command> [options] [<args ...>]
+```
+
+## `broccoli serve` (`s`)
+
+Starts a development HTTP server that rebuilds on every file change. Uses the
+`Watcher` and `Server` classes internally.
+
+```bash
+broccoli serve [options]
+# alias:
+broccoli s [options]
+```
+
+<ParamField path="--port" type="number">
+  The port for the development server to listen on.
+  **Default: `4200`**.
+</ParamField>
+
+<ParamField path="--host" type="string">
+  The hostname or IP address to bind the server to.
+  **Default: `"localhost"`**.
+</ParamField>
+
+<ParamField path="--ssl" type="boolean flag">
+  Serve over HTTPS. Requires `--ssl-key` and `--ssl-cert` files to be present.
+  **Default: disabled**.
+</ParamField>
+
+<ParamField path="--ssl-key" type="string">
+  Path to the PEM-encoded SSL private key, resolved from `cwd`.
+  **Default: `"ssl/server.key"`**.
+</ParamField>
+
+<ParamField path="--ssl-cert" type="string">
+  Path to the PEM-encoded SSL certificate file, resolved from `cwd`.
+  **Default: `"ssl/server.crt"`**.
+</ParamField>
+
+<ParamField path="--brocfile-path" type="string">
+  Explicit path to the Brocfile. When omitted, Broccoli auto-discovers
+  `Brocfile.js` / `Brocfile.ts` in `cwd`.
+</ParamField>
+
+<ParamField path="--output-path" type="string">
+  If provided, build output is synced to this directory on every successful
+  build (in addition to the internal temp directory).
+</ParamField>
+
+<ParamField path="--cwd" type="string">
+  Override the working directory used for path resolution and Brocfile
+  discovery. Defaults to `process.cwd()`.
+</ParamField>
+
+<ParamField path="--no-watch" type="boolean flag">
+  Disable file watching. Performs a single build and starts the server, but
+  does not trigger rebuilds on subsequent file changes.
+</ParamField>
+
+<ParamField path="--watcher" type="string">
+  Force a specific sane watcher backend. Accepted values: `"watchman"`,
+  `"polling"`, `"node"`. When omitted, `WatchDetector` chooses automatically.
+</ParamField>
+
+<ParamField path="-e, --environment" type="string">
+  Set the build environment string forwarded to the Brocfile as
+  `BrocfileOptions.env`. **Default: `"development"`**.
+</ParamField>
+
+<ParamField path="--prod" type="boolean flag">
+  Alias for `--environment=production`. Overrides `--environment` when both are
+  present.
+</ParamField>
+
+<ParamField path="--dev" type="boolean flag">
+  Alias for `--environment=development`. Overrides `--environment` when both
+  are present.
+</ParamField>
+
+### Examples
+
+```bash
+# Basic serve on default port
+broccoli serve
+
+# Custom host and port
+broccoli s --host 0.0.0.0 --port 3000
+
+# HTTPS with custom cert paths
+broccoli serve --ssl --ssl-key certs/key.pem --ssl-cert certs/cert.pem
+
+# Production environment, sync output to ./public
+broccoli serve --prod --output-path public
+
+# Use watchman and serve from a non-default Brocfile
+broccoli serve --watcher watchman --brocfile-path config/Brocfile.js
+```
+
+---
+
+## `broccoli build` (`b`)
+
+Runs a single build (or a persistent watch-mode build) and writes output to a
+target directory.
+
+```bash
+broccoli build [target] [options]
+# alias:
+broccoli b [target] [options]
+```
+
+The optional positional argument `[target]` specifies the output directory and
+is equivalent to `--output-path`. **Default output directory: `dist`**.
+
+<Note>
+  `[target]` and `--output-path` are mutually exclusive. Passing both causes
+  the CLI to exit with an error.
+</Note>
+
+<ParamField path="[target]" type="string">
+  Positional output directory. Cannot be the current directory or any of its
+  parent directories — this is a safety guard to prevent overwriting your
+  source tree.
+</ParamField>
+
+<ParamField path="--output-path" type="string">
+  Alternative way to specify the output directory. Equivalent to `[target]`.
+  **Default: `"dist"`**.
+</ParamField>
+
+<ParamField path="--brocfile-path" type="string">
+  Explicit path to the Brocfile.
+</ParamField>
+
+<ParamField path="--cwd" type="string">
+  Override the working directory.
+</ParamField>
+
+<ParamField path="--watch" type="boolean flag">
+  Keep the watcher alive after the initial build and rebuild on file changes.
+  On each successful rebuild the output directory is re-synced. Without this
+  flag the process exits after the first successful build.
+</ParamField>
+
+<ParamField path="--watcher" type="string">
+  Force a specific sane watcher backend: `"watchman"`, `"polling"`, or
+  `"node"`.
+</ParamField>
+
+<ParamField path="-e, --environment" type="string">
+  Set the build environment. **Default: `"development"`**.
+</ParamField>
+
+<ParamField path="--prod" type="boolean flag">
+  Alias for `--environment=production`.
+</ParamField>
+
+<ParamField path="--dev" type="boolean flag">
+  Alias for `--environment=development`.
+</ParamField>
+
+### Examples
+
+```bash
+# One-shot build to dist/
+broccoli build
+
+# Build to a custom directory
+broccoli b output/
+
+# Production build to dist/
+broccoli build --prod
+
+# Watch mode — rebuilds on change
+broccoli build --watch --output-path public
+
+# Specify a non-default Brocfile and output path
+broccoli build --brocfile-path build/Brocfile.js --output-path artifacts/
+```
+
+---
+
+## Command Summary
+
+| Command | Alias | Description |
+|---|---|---|
+| `broccoli serve` | `s` | Start a live-reloading development server |
+| `broccoli build` | `b` | Build once (or watch) and write output to disk |
+
+| Flag | `serve` | `build` | Default |
+|---|:---:|:---:|---|
+| `--port` | ✓ | — | `4200` |
+| `--host` | ✓ | — | `localhost` |
+| `--ssl` | ✓ | — | `false` |
+| `--ssl-key` | ✓ | — | `ssl/server.key` |
+| `--ssl-cert` | ✓ | — | `ssl/server.crt` |
+| `--brocfile-path` | ✓ | ✓ | auto-discover |
+| `--output-path` | ✓ | ✓ | — / `dist` |
+| `--cwd` | ✓ | ✓ | `process.cwd()` |
+| `--no-watch` | ✓ | — | watch enabled |
+| `--watch` | — | ✓ | `false` |
+| `--watcher` | ✓ | ✓ | auto-detect |
+| `-e, --environment` | ✓ | ✓ | `development` |
+| `--prod` | ✓ | ✓ | — |
+| `--dev` | ✓ | ✓ | — |

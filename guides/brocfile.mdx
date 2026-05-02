@@ -1,0 +1,172 @@
+---
+title: 'Brocfile.js: defining your Broccoli build pipeline'
+description: 'Write a Brocfile.js exporting a function that returns a tree. Covers the options hash, ES module syntax, file discovery, and environments.'
+---
+
+Every Broccoli project begins with a `Brocfile.js` at the root of your repository. This file is the single source of truth for your build pipeline — it describes the tree transformations Broccoli should apply and returns the final output node. Broccoli reads this file each time you run `broccoli build` or `broccoli serve`, calls the exported function, and hands it the current build options.
+
+## What is a tree?
+
+In Broccoli, a **tree** is either a directory path string (like `'app'` or `'src'`) or a plugin object that conforms to the [Plugin API Specification](https://github.com/broccolijs/broccoli/blob/master/docs/node-api.md). Trees can be composed: you pass one tree as an input to another plugin, building a directed acyclic graph of transformations. When you run a build, Broccoli walks that graph and materialises the output.
+
+## The function export pattern
+
+Your `Brocfile.js` must export a **function** that receives an options hash and returns a tree. This is the current recommended pattern:
+
+```js
+// Brocfile.js
+export default (options) => {
+  return 'app';
+};
+```
+
+The function receives a single `options` argument populated by the CLI. The simplest possible Brocfile simply returns a string — the name of a source directory to use as the build output:
+
+```js
+export default () => 'app';
+```
+
+With this Brocfile and a project like:
+
+```
+app/
+├── main.js
+└── helper.js
+Brocfile.js
+package.json
+```
+
+Running `broccoli build the-output` produces:
+
+```
+the-output/
+├── main.js
+└── helper.js
+```
+
+<Warning>
+  Exporting a tree or string **directly** (not wrapped in a function) is deprecated. While Broccoli still wraps a bare export in a function internally for backwards compatibility, you will not receive the `options` hash, and this pattern may be removed in a future release.
+</Warning>
+
+## The options hash
+
+Broccoli passes one argument to your exported function: an options object. Currently it carries a single property:
+
+| Property | Type     | Default         | Description                                                    |
+| -------- | -------- | --------------- | -------------------------------------------------------------- |
+| `env`    | `string` | `'development'` | The build environment, set via `--environment`, `--prod`, or `--dev`. |
+
+Use the `env` property to branch your pipeline for different environments:
+
+```js
+export default (options) => {
+  let tree = 'app';
+
+  if (options.env === 'production') {
+    // apply minification, fingerprinting, etc.
+    tree = minify(tree);
+  }
+
+  return tree;
+};
+```
+
+The `--prod` flag is an alias for `--environment=production`, and `--dev` is an alias for `--environment=development`.
+
+## ES module syntax
+
+Broccoli supports [ES6 modules](https://nodejs.org/api/esm.html) in `Brocfile.js`. Node.js 20+ handles ES module syntax natively when the file uses `import`/`export`, so you can use `import` and `export default` freely:
+
+<Note>
+  Broccoli 4.0 dropped the separate `esm` package. Native Node.js ESM support (Node >= 20.19.*) is used instead.
+</Note>
+
+<Tabs>
+  <Tab title="ES modules (recommended)">
+    ```js
+    // Brocfile.js
+    import Funnel from 'broccoli-funnel';
+
+    export default () => new Funnel('app', {
+      destDir: 'appkit',
+    });
+    ```
+  </Tab>
+  <Tab title="CommonJS">
+    ```js
+    // Brocfile.js
+    const Funnel = require('broccoli-funnel');
+
+    module.exports = () => new Funnel('app', {
+      destDir: 'appkit',
+    });
+    ```
+  </Tab>
+</Tabs>
+
+Both styles work. ES module syntax is the recommended approach, as it is the future of Node.js module authoring. CommonJS `require` / `module.exports` remains fully supported if you prefer it or if your project already uses it.
+
+<Note>
+  TypeScript uses a slightly different import syntax for CommonJS packages. See the [TypeScript guide](/guides/typescript) for details.
+</Note>
+
+## File discovery
+
+Broccoli uses [findup-sync](https://www.npmjs.com/package/findup-sync) to locate your Brocfile, searching upward from the current working directory. It matches the glob pattern `Brocfile.{ts,js}` case-insensitively, so a file named `brocfile.js` or `BROCFILE.JS` will also be found.
+
+You can override the search with the `--brocfile-path` CLI flag:
+
+```bash
+broccoli build dist --brocfile-path path/to/my/Brocfile.js
+```
+
+## Environment-aware example
+
+Here is a more complete Brocfile that behaves differently in development and production:
+
+```js
+// Brocfile.js
+import Funnel from 'broccoli-funnel';
+import MergeTrees from 'broccoli-merge-trees';
+
+export default (options) => {
+  const appTree = new Funnel('app', {
+    destDir: 'assets',
+    annotation: 'Application source',
+  });
+
+  const publicTree = new Funnel('public', {
+    annotation: 'Public assets',
+  });
+
+  let tree = new MergeTrees([appTree, publicTree]);
+
+  if (options.env === 'production') {
+    // production-only transform, e.g. minification
+    // tree = minify(tree);
+  }
+
+  return tree;
+};
+```
+
+## TypeScript support
+
+You can name your file `Brocfile.ts` instead of `Brocfile.js`. Broccoli automatically invokes [ts-node](https://www.npmjs.com/package/ts-node) to compile it on the fly, so no separate compilation step is required. See the [TypeScript guide](/guides/typescript) for full details on types and import syntax.
+
+## Summary
+
+<AccordionGroup>
+  <Accordion title="Where does Brocfile.js live?">
+    In the root of your project. Broccoli uses `findup-sync` to search upward from the current working directory, so it will also be found if you run `broccoli` from a subdirectory.
+  </Accordion>
+  <Accordion title="Do I have to use ES module syntax?">
+    No. CommonJS `require` / `module.exports` works fine. ES module syntax (`import` / `export default`) is recommended because it is the direction Node.js is heading, and because it is what Broccoli's own examples use.
+  </Accordion>
+  <Accordion title="What happens if I export a bare tree instead of a function?">
+    Broccoli wraps it in a function automatically for backwards compatibility, but you will not receive the `options` hash. This behaviour is deprecated and may be removed in a future version.
+  </Accordion>
+  <Accordion title="Can I use a different file name?">
+    The file must be named `Brocfile.js` or `Brocfile.ts` (case-insensitive). You can point Broccoli at a different path with `--brocfile-path`, but the file must still export a function (or a deprecated bare tree).
+  </Accordion>
+</AccordionGroup>

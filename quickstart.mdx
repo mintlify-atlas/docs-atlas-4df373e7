@@ -1,81 +1,188 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
-icon: 'rocket'
+title: 'Broccoli Quickstart: Your First Build in 5 Minutes'
+description: 'Install Broccoli and broccoli-cli, write a Brocfile.js, and run your first broccoli build and broccoli serve commands step by step.'
 ---
 
-## Get started in three steps
+This guide takes you from zero to a working Broccoli build. You will install the two required packages, create a `Brocfile.js` that exports a build tree, and then run both `broccoli build` and `broccoli serve` to verify everything works.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  Broccoli requires Node.js >= 20.19.*. Run `node --version` to confirm before continuing.
+</Note>
 
-### Step 1: Set up your local environment
+<Steps>
+  <Step title="Install broccoli and broccoli-cli">
+    Broccoli is split into two packages: `broccoli` (the build engine, installed as a dev dependency in your project) and `broccoli-cli` (the CLI that provides the `broccoli` command, installed globally).
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    <CodeGroup>
 
-### Step 2: Deploy your changes
+    ```bash npm
+    npm install --save-dev broccoli
+    npm install --global broccoli-cli
+    ```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```bash yarn
+    yarn add --dev broccoli
+    yarn global add broccoli-cli
+    ```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    ```bash pnpm
+    pnpm add --save-dev broccoli
+    pnpm add --global broccoli-cli
+    ```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    </CodeGroup>
 
-### Step 3: Go live
+    <Tip>
+      The `broccoli` package has no `bin` entry and provides no CLI on its own. You must install `broccoli-cli` globally (or via `npx`) to get the `broccoli build` and `broccoli serve` commands.
+    </Tip>
+  </Step>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+  <Step title="Create your project structure">
+    Create a simple `app/` directory with a couple of source files. Broccoli treats directories as the atomic unit of its build graph.
+
+    ```
+    my-project/
+    ├── app/
+    │   ├── main.js
+    │   └── helper.js
+    ├── package.json
+    └── Brocfile.js   ← you will create this next
+    ```
+  </Step>
+
+  <Step title="Write a Brocfile.js">
+    Create a `Brocfile.js` in your project root. The file must export a function that returns a tree. The simplest possible tree is a plain directory path string.
+
+    <Tabs>
+      <Tab title="JavaScript">
+        **Minimal example** — pass the `app/` directory through unchanged:
+
+        ```js Brocfile.js
+        export default () => 'app';
+        ```
+
+        **With a plugin** — use `broccoli-funnel` to remap the output directory:
+
+        ```js Brocfile.js
+        import Funnel from 'broccoli-funnel';
+
+        export default () => new Funnel('app', {
+          destDir: 'assets'
+        });
+        ```
+
+        **Environment-aware** — apply different transforms per environment:
+
+        ```js Brocfile.js
+        import Funnel from 'broccoli-funnel';
+
+        export default (options) => {
+          let tree = new Funnel('app', { destDir: 'assets' });
+
+          if (options.env === 'production') {
+            // tree = minify(tree);  // add production-only transforms here
+          }
+
+          return tree;
+        };
+        ```
+      </Tab>
+      <Tab title="TypeScript">
+        Rename the file to `Brocfile.ts`. Broccoli will automatically process it through `ts-node`. Import the `BrocfileOptions` type for full type safety.
+
+        **Minimal example:**
+
+        ```ts Brocfile.ts
+        import { BrocfileOptions } from 'broccoli';
+
+        export default (options: BrocfileOptions) => 'app';
+        ```
+
+        **With a plugin and environment branching:**
+
+        ```ts Brocfile.ts
+        import { BrocfileOptions } from 'broccoli';
+        import Funnel = require('broccoli-funnel');
+
+        export default (options: BrocfileOptions) => {
+          let tree = new Funnel('app', { destDir: 'assets' });
+
+          if (options.env === 'production') {
+            // tree = minify(tree);
+          }
+
+          return tree;
+        };
+        ```
+
+        <Note>
+          When importing CommonJS modules (those that use `module.exports`) from a TypeScript Brocfile, use `import Foo = require('foo')` rather than `import Foo from 'foo'`. TypeScript's ES module import syntax only works with ES modules by default.
+        </Note>
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Run broccoli build">
+    Build your project into an output directory. By default, `broccoli build` writes to `dist/`. Pass a directory name as an argument to use a different path.
+
+    ```bash
+    broccoli build the-output
+    ```
+
+    With the minimal `Brocfile.js` from above and the example `app/` directory, the output mirrors the source:
+
+    ```
+    the-output/
+    ├── main.js
+    └── helper.js
+    ```
+
+    If you used the `Funnel` example with `destDir: 'assets'`, the output will be nested:
+
+    ```
+    the-output/
+    └── assets/
+        ├── main.js
+        └── helper.js
+    ```
+
+    <Warning>
+      The build output directory cannot be the current working directory or a direct parent of it. Broccoli will exit with an error if you attempt this.
+    </Warning>
+  </Step>
+
+  <Step title="Run broccoli serve">
+    Start the development server to watch for file changes and rebuild automatically. The server binds to `localhost:4200` by default.
+
+    ```bash
+    broccoli serve
+    ```
+
+    You can configure the host and port:
+
+    ```bash
+    broccoli serve --port 3000 --host 0.0.0.0
+    ```
+
+    To build in production mode during development:
+
+    ```bash
+    broccoli serve --prod
+    # equivalent to: broccoli serve --environment=production
+    ```
+
+    <Warning>
+      Do not run `broccoli serve` on a production server. It is intended for local development only. Use `broccoli build` to precompile assets and serve the static output from a dedicated web server.
+    </Warning>
+
+    The server rebuilds only the affected nodes in the graph when a source file changes, keeping incremental rebuild times flat regardless of project size.
+  </Step>
+</Steps>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
+You now have a working Broccoli build. From here you can:
 
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+- Browse the [broccoli-plugin ecosystem on npm](https://www.npmjs.org/browse/keyword/broccoli-plugin) to add transpilation, bundling, or fingerprinting to your pipeline.
+- Read the [Plugin API Specification](https://github.com/broccolijs/broccoli/blob/master/docs/node-api.md) to write your own plugins.
+- Use the `Builder` class programmatically to integrate Broccoli into custom tooling without the CLI.

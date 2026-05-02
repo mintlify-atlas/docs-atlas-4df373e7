@@ -1,0 +1,141 @@
+---
+title: 'Writing Broccoli Plugins with broccoli-plugin'
+description: 'Learn what a Broccoli plugin is, how to write one using broccoli-plugin as your base class, and which properties are available during a build.'
+---
+
+A Broccoli plugin is a transform node in the build graph. It reads from one or more input directories, performs some work—compiling, copying, concatenating—and writes results to a dedicated output directory. Every plugin you write is an instance of a class that extends the `broccoli-plugin` base class and implements a single `build()` method.
+
+<Note>
+  The canonical base class lives at [https://github.com/broccolijs/broccoli-plugin](https://github.com/broccolijs/broccoli-plugin). Install it with `npm install broccoli-plugin`.
+</Note>
+
+## Minimal working plugin
+
+The example below copies every file from its single input directory into the output directory.
+
+```javascript
+const Plugin = require('broccoli-plugin');
+const fs = require('fs');
+const path = require('path');
+
+class CopyPlugin extends Plugin {
+  constructor(inputNodes, options) {
+    super(inputNodes, options);
+  }
+
+  build() {
+    const srcDir = this.inputPaths[0];
+    const destDir = this.outputPath;
+
+    for (const filename of fs.readdirSync(srcDir)) {
+      fs.copyFileSync(
+        path.join(srcDir, filename),
+        path.join(destDir, filename)
+      );
+    }
+  }
+}
+
+module.exports = CopyPlugin;
+```
+
+Pass an array of input nodes to `super()`. The Broccoli builder populates `this.inputPaths` with the corresponding resolved directories before calling `build()`.
+
+## Properties available in `build()`
+
+These properties are set up by `broccoli-plugin` before your `build()` method is called. You should treat them as read-only.
+
+<ParamField path="inputPaths" type="string[]" required>
+  An array of absolute paths to directories, one per input node you passed to the constructor. Read files from these paths. Never write to them.
+</ParamField>
+
+<ParamField path="outputPath" type="string" required>
+  The absolute path to the directory where your plugin must write its output. On each rebuild, the builder empties this directory unless `persistentOutput` is `true`.
+</ParamField>
+
+<ParamField path="cachePath" type="string">
+  The absolute path to a directory that persists between rebuilds for the lifetime of the Broccoli process. Use it to cache intermediate results so incremental rebuilds are faster. Not created if you set `needsCache: false`.
+</ParamField>
+
+## Constructor options
+
+Pass an options object as the second argument to `super()` to configure the plugin's behavior.
+
+<ParamField path="annotation" type="string">
+  A human-readable label for this node instance. Appears in build graphs and error messages to help you distinguish multiple instances of the same plugin. Example: `'vendor scripts'`.
+</ParamField>
+
+<ParamField path="needsCache" type="boolean">
+  Defaults to `true`. Set to `false` to skip creating a `cachePath` directory for this plugin. Useful when the plugin is stateless and has no need for a cache.
+</ParamField>
+
+<ParamField path="persistentOutput" type="boolean">
+  Defaults to `false`. When `true`, the builder does not empty the `outputPath` directory between rebuilds. Your plugin is then responsible for managing stale output files. Useful for incremental compilers that track their own output.
+</ParamField>
+
+## Example with options
+
+```javascript
+const Plugin = require('broccoli-plugin');
+
+class IncrementalCompiler extends Plugin {
+  constructor(inputNodes, options) {
+    super(inputNodes, {
+      annotation: 'incremental TypeScript compiler',
+      persistentOutput: true,
+      needsCache: true,
+    });
+  }
+
+  build() {
+    // outputPath is NOT cleared between rebuilds.
+    // Use this.cachePath to store a manifest of compiled files.
+    // Read sources from this.inputPaths[0].
+  }
+}
+```
+
+<Tip>
+  When `persistentOutput` is `true`, watch out for deleted source files. Because the builder no longer clears `outputPath` for you, stale outputs will accumulate unless your plugin removes them explicitly.
+</Tip>
+
+## Multiple input nodes
+
+A plugin can accept more than one input node. The `inputPaths` array mirrors the order of the array you pass to `super()`.
+
+```javascript
+class MergePlugin extends Plugin {
+  constructor(inputNodes, options) {
+    // inputNodes is an array, e.g. [appNode, vendorNode]
+    super(inputNodes, options);
+  }
+
+  build() {
+    for (const inputPath of this.inputPaths) {
+      // copy each input directory into this.outputPath
+    }
+  }
+}
+```
+
+## Asynchronous builds
+
+If `build()` performs async work, return a promise (or use `async/await`). The builder waits for the promise to resolve before proceeding.
+
+```javascript
+const { promisify } = require('util');
+const ncp = promisify(require('ncp'));
+
+class AsyncCopyPlugin extends Plugin {
+  async build() {
+    await ncp(this.inputPaths[0], this.outputPath);
+  }
+}
+```
+
+A rejected promise or thrown exception is reported as a build error.
+
+## Further reading
+
+- [Node API](/plugins/node-api) — the low-level versioned protocol that `broccoli-plugin` implements on your behalf
+- [Migrating from 0.x](/plugins/migrating-from-0x) — updating older `.read()`/`.rebuild()` plugins to the current API

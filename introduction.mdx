@@ -1,0 +1,67 @@
+---
+title: 'Broccoli: Fast Asset Pipeline for Node.js'
+description: 'Broccoli models asset builds as a DAG of nodes for constant-time incremental rebuilds. Learn about the plugin ecosystem and the Builder API.'
+---
+
+Broccoli is a fast, reliable asset pipeline for Node.js that brings constant-time incremental rebuilds to frontend build workflows. Rather than rescanning and reprocessing everything on every change, Broccoli models your build as a directed acyclic graph of nodes — each node representing either a source directory or a transformation — and only re-executes the parts of the graph that have actually changed.
+
+Originally created by Jo Liss and inspired by the scope of the Rails asset pipeline, Broccoli is backend-agnostic and runs entirely on Node. It provides the core engine; the CLI commands (`broccoli build` and `broccoli serve`) are provided separately by [broccoli-cli](https://github.com/broccolijs/broccoli-cli).
+
+## How the build graph works
+
+Every Broccoli build starts with a `Brocfile.js` (or `Brocfile.ts`) in your project root. That file exports a function that returns a **tree** — either a plain directory path string like `'app'`, or a plugin node that transforms one or more input trees into an output tree.
+
+When Broccoli runs a build, it:
+
+1. Calls your Brocfile function to obtain the output node.
+2. Traverses the node graph to discover all inputs and transformations.
+3. Allocates a temporary output directory for each transform node.
+4. Executes each node in topological order, skipping any node whose inputs have not changed.
+
+Because each node caches its output, a file change only invalidates the nodes that depend on that file. The rest of the graph is replayed from cache in constant time — regardless of project size.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Constant-time incremental rebuilds" icon="bolt">
+    Broccoli's build graph caches each node's output. Only nodes affected by a file change are re-run, keeping rebuild times flat even as projects grow.
+  </Card>
+  <Card title="Compact build definitions" icon="file-code">
+    A single `Brocfile.js` describes your entire pipeline. Compose source directories and plugin nodes to define complex transforms in a few lines.
+  </Card>
+  <Card title="TypeScript support" icon="code">
+    Use a `Brocfile.ts` instead of `Brocfile.js` and Broccoli will process it through `ts-node` automatically, with full type information via the exported `BrocfileOptions` type.
+  </Card>
+  <Card title="Environment-aware builds" icon="sliders">
+    Pass `--environment`, `--prod`, or `--dev` to your build commands. The `options.env` value is forwarded to your Brocfile so you can branch on environment at build time.
+  </Card>
+  <Card title="Rich plugin ecosystem" icon="puzzle-piece">
+    Hundreds of community plugins are published under the [`broccoli-plugin` keyword on npm](https://www.npmjs.org/browse/keyword/broccoli-plugin), covering transpilation, bundling, fingerprinting, and more.
+  </Card>
+  <Card title="Programmatic API" icon="terminal">
+    Use the `Builder` class directly to integrate Broccoli into custom tooling without the CLI, with full promise-based control over the build lifecycle.
+  </Card>
+</CardGroup>
+
+## Plugin ecosystem
+
+Broccoli plugins follow the [Plugin API Specification](https://github.com/broccolijs/broccoli/blob/master/docs/node-api.md). Any object that implements `__broccoliFeatures__` and `__broccoliGetInfo__` is a valid node and can be composed into a build graph.
+
+The most commonly used plugins include:
+
+- **[broccoli-funnel](https://www.npmjs.com/package/broccoli-funnel)** — Filter and remap files within a tree, rename them, or move them to a different output path.
+- **[broccoli-merge-trees](https://www.npmjs.com/package/broccoli-merge-trees)** — Merge multiple input trees into a single output tree.
+- **[broccoli-filter](https://github.com/broccolijs/broccoli-filter)** — Base class for writing plugins that transform individual files.
+
+Search [npm for `broccoli-plugin`](https://www.npmjs.org/browse/keyword/broccoli-plugin) to browse the full ecosystem.
+
+## Ready to build?
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get a working build in under five minutes. Install the tools, write a Brocfile, and run your first build.
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Detailed setup instructions covering Node version requirements, package manager options, and the separate broccoli-cli package.
+  </Card>
+</CardGroup>

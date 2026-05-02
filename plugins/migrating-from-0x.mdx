@@ -1,0 +1,163 @@
+---
+title: 'Migrating Broccoli Plugins from 0.x to 1.x'
+description: 'Migrate 0.x Broccoli plugins to broccoli-plugin. Migration paths for broccoli-writer, broccoli-filter, and broccoli-caching-writer 2.x.'
+---
+
+Broccoli 1.0 replaced the old `.read()`/`.rebuild()` callback-based plugin API with a class-based model backed by the [`broccoli-plugin`](https://github.com/broccolijs/broccoli-plugin) base class. Broccoli 1.x refuses to run plugins that still use the old API, so any plugin written for 0.x needs to be updated before it will work with a modern Broccoli build. This guide walks through each migration path and explains the terminology change that came with the new API.
+
+## Terminology: "trees" vs. "nodes"
+
+Along with the API change, the Broccoli community moved away from calling plugin instances "trees" and toward calling them "nodes" (as in nodes in the build graph). The old functional instantiation style was also replaced with explicit `new`:
+
+```javascript
+// Old convention
+var outputTree = jshintTree(inputTree);
+
+// New convention
+var outputNode = new JSHinter(inputNode);
+```
+
+Both styles continue to work at runtime, but new code and documentation follow the "nodes" convention. Update variable names as you migrate to keep things consistent.
+
+## Check compatibility before upgrading
+
+If you are still on Broccoli 0.16.5 or newer, you can identify incompatible plugins before switching to 1.x by setting the `BROCCOLI_WARN_READ_API` environment variable.
+
+```bash
+BROCCOLI_WARN_READ_API=y broccoli serve
+```
+
+Any plugin that still uses the deprecated `.read`/`.rebuild` API will print a warning. Upgrade those plugins (or patch them using the steps below) before bumping your `broccoli` dependency to `^1.0.0`.
+
+<Warning>
+  `BROCCOLI_WARN_READ_API` is only available in Broccoli 0.16.5 and later. If you are on an older 0.x release, upgrade to 0.16.5 first to get the warnings before jumping to 1.x.
+</Warning>
+
+## Migration paths
+
+The steps you need to take depend on which base class (if any) your plugin currently uses.
+
+### Migrating from broccoli-writer or no base class
+
+This is the most common migration. If your plugin subclasses `broccoli-writer`, or implements `.read()` or `.rebuild()` directly without any base class, replace it with a `broccoli-plugin` subclass.
+
+<Steps>
+  <Step title="Install broccoli-plugin">
+    ```bash
+    npm install broccoli-plugin
+    ```
+  </Step>
+  <Step title="Replace the base class and constructor">
+    Swap out `broccoli-writer` for `broccoli-plugin` and call `Plugin.call(this, [inputNode])` (passing an array of input nodes) instead of storing `inputTree` manually.
+  </Step>
+  <Step title="Replace write() with build()">
+    Remove the `write(readTree, destDir)` method. Add a `build()` method that reads from `this.inputPaths[0]` and writes to `this.outputPath`.
+  </Step>
+</Steps>
+
+<Tabs>
+  <Tab title="Before (broccoli-writer)">
+    ```javascript
+    var Writer = require('broccoli-writer');
+
+    MyPlugin.prototype = Object.create(Writer.prototype);
+    MyPlugin.prototype.constructor = MyPlugin;
+    function MyPlugin(inputTree) {
+      this.inputTree = inputTree;
+    }
+
+    MyPlugin.prototype.write = function(readTree, destDir) {
+      readTree(this.inputTree).then(function(srcDir) {
+        // Build from srcDir to destDir
+      });
+    };
+    ```
+  </Tab>
+  <Tab title="After (broccoli-plugin)">
+    ```javascript
+    var Plugin = require('broccoli-plugin');
+
+    MyPlugin.prototype = Object.create(Plugin.prototype);
+    MyPlugin.prototype.constructor = MyPlugin;
+    function MyPlugin(inputNode) {
+      Plugin.call(this, [inputNode]);
+    }
+
+    MyPlugin.prototype.build = function() {
+      // Build from this.inputPaths[0] to this.outputPath
+    };
+    ```
+  </Tab>
+</Tabs>
+
+If you always have exactly one input node, use `this.inputPaths[0]`. For plugins that accept multiple inputs, `this.inputPaths` is an array in the same order as the array you passed to `Plugin.call`.
+
+### Migrating from broccoli-filter
+
+Upgrade your `broccoli-filter` dependency to version 1.0.0 or newer. The main requirement is that you call the base class constructor explicitly:
+
+```javascript
+function MyFilter(inputNode, options) {
+  Filter.call(this, inputNode, options);
+}
+```
+
+Refer to the [broccoli-filter upgrade guide](https://github.com/broccolijs/broccoli-filter/blob/master/README.md#upgrading-from-01x-to-1x) for the full details.
+
+### Migrating from broccoli-caching-writer
+
+Upgrade `broccoli-caching-writer` to version 2.0.0. Starting with 2.0, its API is a drop-in replacement for `broccoli-plugin`, which means the interface changed significantly from 0.x/1.x.
+
+<Tabs>
+  <Tab title="Before (broccoli-caching-writer 0.x/1.x)">
+    ```javascript
+    MyPlugin.prototype.updateCache = function(sourcePaths, destPath) {
+      // Compile from sourcePaths into destPath
+    };
+    ```
+  </Tab>
+  <Tab title="After (broccoli-caching-writer 2.x)">
+    ```javascript
+    MyPlugin.prototype.build = function() {
+      // Compile from this.inputPaths into this.outputPath
+    };
+    ```
+  </Tab>
+</Tabs>
+
+Replace every reference to `Plugin` in the [broccoli-plugin README](https://github.com/broccolijs/broccoli-plugin) with `CachingWriter` as you work through the migration.
+
+## Upgrading the broccoli dependency
+
+Once all plugins in your project are on the new API, update the `broccoli` version in `package.json`:
+
+```json
+{
+  "devDependencies": {
+    "broccoli": "^1.0.0"
+  }
+}
+```
+
+The `broccoli serve` and `broccoli build` CLI commands are unchanged. If you use Broccoli's programmatic API (`require('broccoli')`), review the [CHANGELOG](https://github.com/broccolijs/broccoli/blob/master/CHANGELOG.md) for breaking changes to the public `Builder` interface.
+
+<Tip>
+  If a plugin you depend on has not been updated by its author, consider sending a pull request. The migration for a typical `broccoli-writer` plugin takes under 15 minutes.
+</Tip>
+
+## Summary of API differences
+
+| Concept | 0.x API | 1.x API |
+|---|---|---|
+| Instance terminology | tree | node |
+| Instantiation | `myPlugin(inputTree)` | `new MyPlugin(inputNode)` |
+| Base class | `broccoli-writer` / none | `broccoli-plugin` |
+| Main method | `write(readTree, destDir)` | `build()` |
+| Input paths | resolved via `readTree(this.inputTree)` | `this.inputPaths` array |
+| Output path | `destDir` argument | `this.outputPath` |
+| Cache directory | not available | `this.cachePath` |
+
+## Further reading
+
+- [Plugin overview](/plugins/overview) — writing a new plugin with `broccoli-plugin`
+- [Node API](/plugins/node-api) — the versioned protocol underlying `broccoli-plugin`

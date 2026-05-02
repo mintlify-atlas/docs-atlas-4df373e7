@@ -1,0 +1,190 @@
+---
+title: 'Running broccoli serve and broccoli build'
+description: 'Start the Broccoli dev server with live rebuilds, run one-time or watch-mode builds, choose a watcher backend, and configure SSL, host, and port.'
+---
+
+The Broccoli CLI provides two commands: `broccoli serve` for development and `broccoli build` for producing a distributable artefact. Both commands read your `Brocfile.js`, construct the build graph, and run the pipeline — but they differ in how they present the output and whether they watch for changes.
+
+<Note>
+  The CLI itself is provided by the [`broccoli-cli`](https://github.com/broccolijs/broccoli-cli) package. If the `broccoli` command is not found, install it globally: `npm install --global broccoli-cli`.
+</Note>
+
+## broccoli serve
+
+`broccoli serve` (alias: `broccoli s`) starts a development HTTP server, performs an initial build, and then watches your source directories for changes. Each time a watched file changes, Broccoli rebuilds and the new output is available on the next request.
+
+```bash
+broccoli serve
+# Serving on http://localhost:4200
+```
+
+### Options
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--port <port>` | `4200` | The port the server listens on. |
+| `--host <host>` | `localhost` | The hostname or IP the server binds to. |
+| `--ssl` | `false` | Serve over HTTPS. |
+| `--ssl-key <path>` | `ssl/server.key` | Path to the SSL private key file. |
+| `--ssl-cert <path>` | `ssl/server.crt` | Path to the SSL certificate file. |
+| `--no-watch` | — | Disable file watching; perform a single build and serve statically. |
+| `--watcher <backend>` | auto-detected | File watcher backend: `polling`, `watchman`, or `node`. |
+| `--output-path <path>` | — | Also sync build output to this directory on each successful build. |
+| `--brocfile-path <path>` | auto-discovered | Path to a specific Brocfile. |
+| `--cwd <path>` | auto-discovered | Override the working directory. |
+| `-e, --environment <env>` | `development` | Build environment string, available as `options.env`. |
+| `--prod` | — | Alias for `--environment=production`. |
+| `--dev` | — | Alias for `--environment=development`. |
+
+### SSL
+
+To enable HTTPS, pass `--ssl` together with paths to your key and certificate files:
+
+```bash
+broccoli serve --ssl --ssl-key ssl/server.key --ssl-cert ssl/server.crt
+```
+
+The server reads the key and cert files relative to the current working directory. If either file is missing, Broccoli throws an error with the expected paths.
+
+<Warning>
+  Do not use `broccoli serve` in production. It exposes a needlessly large attack surface for serving static assets. Use `broccoli build` to precompile your assets and then serve the resulting files from a dedicated web server such as nginx or a CDN.
+</Warning>
+
+## broccoli build
+
+`broccoli build` (alias: `broccoli b`) performs a single build and writes the output to a target directory, then exits.
+
+```bash
+broccoli build dist
+```
+
+If you do not specify a target directory, output goes to `dist/`:
+
+```bash
+broccoli build
+# equivalent to: broccoli build dist
+```
+
+You can also specify the output path via the `--output-path` flag (but not both a positional argument and the flag at the same time):
+
+```bash
+broccoli build --output-path dist
+```
+
+### Options
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--watch` | `false` | Stay running and rebuild whenever source files change. |
+| `--watcher <backend>` | auto-detected | File watcher backend: `polling`, `watchman`, or `node`. |
+| `--output-path <path>` | — | Equivalent to the positional `[target]` argument. |
+| `--brocfile-path <path>` | auto-discovered | Path to a specific Brocfile. |
+| `--cwd <path>` | auto-discovered | Override the working directory. |
+| `-e, --environment <env>` | `development` | Build environment string, available as `options.env`. |
+| `--prod` | — | Alias for `--environment=production`. |
+| `--dev` | — | Alias for `--environment=development`. |
+
+### Watch mode
+
+Add `--watch` to keep the process running and rebuild on file changes, mirroring the serve command but without the HTTP server:
+
+```bash
+broccoli build dist --watch
+```
+
+This is useful in CI pre-flight checks, in custom task runners, or when you want to drive a separate file server yourself.
+
+## Watcher backends
+
+Broccoli uses the [sane](https://github.com/amasad/sane) library under the hood and auto-detects the best available watcher. You can override the choice with `--watcher`:
+
+<Tabs>
+  <Tab title="node (default)">
+    ```bash
+    broccoli serve --watcher node
+    ```
+    Uses Node's built-in `fs.watch`. Works everywhere, no external dependencies. May have latency on large directory trees.
+  </Tab>
+  <Tab title="watchman">
+    ```bash
+    broccoli serve --watcher watchman
+    ```
+    Uses [Watchman](https://facebook.github.io/watchman/) for fast, efficient watching. Requires Watchman to be installed on the system. Recommended on macOS and Linux for large projects.
+  </Tab>
+  <Tab title="polling">
+    ```bash
+    broccoli serve --watcher polling
+    ```
+    Polls the filesystem at a regular interval. Slow but reliable on networked filesystems (NFS, Docker volumes) where `fs.watch` events are unreliable.
+  </Tab>
+</Tabs>
+
+Broccoli uses [watch-detector](https://www.npmjs.com/package/watch-detector) to determine the best option automatically based on your platform and available tools.
+
+## Environment flags
+
+All three environment flags (`-e`/`--environment`, `--prod`, `--dev`) are available on both `serve` and `build`. They set `options.env` in your Brocfile:
+
+```bash
+# These are equivalent
+broccoli build dist -e production
+broccoli build dist --environment=production
+broccoli build dist --prod
+```
+
+## Signal handling
+
+Both `broccoli serve` and `broccoli build --watch` register handlers for `SIGINT` (Ctrl+C) and `SIGTERM`. When either signal is received, Broccoli:
+
+1. Stops the watcher
+2. Waits for the current build step to finish
+3. Runs `builder.cleanup()` to remove temporary directories
+4. Exits with the appropriate exit code
+
+This means you can safely interrupt a build with Ctrl+C without leaving stale temporary files behind. The cleanup is guaranteed to run in the `finally` block of the build loop:
+
+```ts
+// From cli.ts — cleanup always runs on exit
+process.on('SIGINT', cleanupAndExit);
+process.on('SIGTERM', cleanupAndExit);
+```
+
+## Output directory safety
+
+Broccoli refuses to write build output into the current directory or any of its parent directories. If you accidentally specify a parent directory as the output target, the CLI prints an error and exits:
+
+```
+build directory can not be the current or direct parent directory: /path/to/project
+```
+
+This guards against accidentally overwriting your source files.
+
+## Quick reference
+
+<CodeGroup>
+
+```bash Development server
+broccoli serve
+```
+
+```bash Development server on custom port
+broccoli serve --port 3000 --host 0.0.0.0
+```
+
+```bash HTTPS development server
+broccoli serve --ssl --ssl-key ssl/server.key --ssl-cert ssl/server.crt
+```
+
+```bash One-time production build
+broccoli build dist --prod
+```
+
+```bash Continuous build with file watching
+broccoli build dist --watch
+```
+
+```bash Build with watchman backend
+broccoli build dist --watcher watchman
+```
+
+</CodeGroup>

@@ -1,0 +1,142 @@
+---
+title: 'Broccoli Low-Level Node API Reference'
+description: 'The versioned Broccoli node API: __broccoliFeatures__, __broccoliGetInfo__, and full nodeInfo properties for transform and source nodes.'
+---
+
+The Broccoli node API is the contract between the `Builder` class and individual nodes in the build graph. Most plugin authors never interact with it directly—the [`broccoli-plugin`](https://github.com/broccolijs/broccoli-plugin) base class implements it for you. This reference is aimed at developers who are building tooling on top of Broccoli, writing alternative base classes, or need to understand how the builder and nodes coordinate at runtime.
+
+## Why the API is versioned
+
+npm's nested-dependency model makes it impossible for a plugin to force a particular version of Broccoli to be used at the application level. If a plugin declared `broccoli@1.3.0` as a dependency to use a new feature, npm would install a second, unused copy of Broccoli inside that plugin's `node_modules`—while the app continued to run the older version:
+
+```
+my-app
+├── broccoli@1.0.0          ← used for building
+└─┬ some-broccoli-plugin
+  └── broccoli@1.3.0        ← sits here unused
+```
+
+Because of this, plugins do not declare an npm dependency on Broccoli at all. Instead, the API is versioned through feature flags so that:
+
+- A new builder can talk to an older plugin by falling back to the plugin's declared dialect.
+- A new plugin can talk to an older builder by inspecting `builderFeatures` and returning a compatible `nodeInfo`.
+
+The `broccoli-plugin` base class handles this negotiation automatically. Multiple plugins using different versions of `broccoli-plugin` can coexist in the same application without conflict.
+
+## The two required properties
+
+Every Broccoli node must expose exactly two special properties.
+
+<ParamField path="__broccoliFeatures__" type="object" required>
+  An object whose keys are feature flag names and whose values are `true`. Declares which version of the node API this node speaks. The builder reads this object to determine which dialect to use when interpreting the `nodeInfo` returned by `__broccoliGetInfo__`.
+</ParamField>
+
+<ParamField path="__broccoliGetInfo__" type="function" required>
+  A function with the signature `(builderFeatures) => nodeInfo`. The builder passes its own feature set as `builderFeatures`. The node inspects that object and returns a `nodeInfo` object in the highest API dialect both parties understand. This function may be called multiple times and must be side-effect free.
+</ParamField>
+
+## Current feature set
+
+The feature set in the current API version is:
+
+```javascript
+{
+  persistentOutputFlag: true,
+  sourceDirectories: true,
+}
+```
+
+Both the builder and nodes are expected to declare this same object in `__broccoliFeatures__`.
+
+## The `nodeInfo` object
+
+`__broccoliGetInfo__` returns a plain object describing the node. All nodes share four common properties; additional properties depend on `nodeType`.
+
+### Common properties
+
+<ParamField path="name" type="string" required>
+  The name of the plugin class this node is an instance of. Used in error messages and build-graph visualizations. Example: `'BroccoliMergeTrees'`.
+</ParamField>
+
+<ParamField path="annotation" type="string | null">
+  A description of this particular node instance. Useful for telling multiple instances of the same plugin apart during debugging. Example: `'vendor directories'`. May be `null` or `undefined`.
+</ParamField>
+
+<ParamField path="instantiationStack" type="string" required>
+  A stack trace captured when the node's constructor ran (`(new Error).stack` minus the first line). Lets you trace where in application code a given node was created, which is valuable when the build graph is large.
+</ParamField>
+
+<ParamField path="nodeType" type='"transform" | "source"' required>
+  Indicates whether this is a transform node (compiles inputs to an output) or a source node (points at an existing directory on disk). Available only when the `sourceDirectories` feature flag is present.
+</ParamField>
+
+### Transform node properties
+
+Nodes with `nodeType: 'transform'` represent plugin instances that read input directories and write to an output directory.
+
+<ParamField path="inputNodes" type="Node[]" required>
+  An array of zero or more Broccoli nodes whose output directories will be provided as inputs to this node. An empty array is valid for nodes that generate output from scratch.
+</ParamField>
+
+<ParamField path="setup" type="function" required>
+  A function with the signature `(inputPaths, outputPath, cachePath) => void`. The builder calls this exactly once before the first build. Use it to store the provided paths on `this` so that `build()` can access them.
+
+  - `inputPaths` — array of absolute paths corresponding to `inputNodes`
+  - `outputPath` — absolute path to the directory where output should be written
+  - `cachePath` — absolute path to a directory that persists between rebuilds (omitted when `needsCache` is `false`)
+</ParamField>
+
+<ParamField path="getCallbackObject" type="function" required>
+  A function with the signature `() => { build: () => Promise | void }`. The builder calls this once after `setup`. The returned object's `build` property is invoked on every rebuild. A rejected promise or thrown error is treated as a build failure.
+</ParamField>
+
+<ParamField path="persistentOutput" type="boolean" required>
+  When `false`, the builder deletes and recreates the `outputPath` directory before each rebuild. When `true`, the builder leaves `outputPath` as-is between rebuilds, letting the plugin manage its own output files incrementally. Available only when the `persistentOutputFlag` feature flag is present.
+</ParamField>
+
+<ParamField path="needsCache" type="boolean" required>
+  When `false`, no `cachePath` directory is created and the `setup` function is called without a third argument. When `true`, a persistent cache directory is created and passed to `setup`.
+</ParamField>
+
+### Source node properties
+
+Nodes with `nodeType: 'source'` represent directories that already exist on disk. They have no `inputNodes` and no `build` step.
+
+<ParamField path="sourceDirectory" type="string" required>
+  A path to an existing directory on disk, relative to the current working directory. The builder reads from this directory as input to downstream transform nodes.
+</ParamField>
+
+<ParamField path="watched" type="boolean" required>
+  When `true`, the Broccoli file watcher monitors `sourceDirectory` recursively and triggers a rebuild whenever a file changes. When `false`, changes to files in `sourceDirectory` do not trigger rebuilds automatically (though those changes may be picked up in the next rebuild regardless). Set to `false` for large vendor directories that change infrequently.
+</ParamField>
+
+## Older API versions
+
+Feature flags are removed one at a time going back in history.
+
+<Tabs>
+  <Tab title="No sourceDirectories">
+    The `nodeInfo.nodeType` property is absent. Source nodes are not supported; every node is implicitly a transform node. The feature set is:
+
+    ```javascript
+    { persistentOutputFlag: true }
+    ```
+  </Tab>
+  <Tab title="No persistentOutputFlag">
+    The `nodeInfo.persistentOutput` property is absent and is always treated as `false`. This is the first version of the modern node API. Its feature set is empty:
+
+    ```javascript
+    {}
+    ```
+  </Tab>
+</Tabs>
+
+## String nodes (deprecated)
+
+For historical reasons, the builder also accepts plain strings as nodes. A string is treated as a watched source node pointing at that path. Plain string nodes are deprecated—use [`broccoli-source`](https://github.com/broccolijs/broccoli-source) instead for a better debugging experience.
+
+## Further reading
+
+- [Plugin overview](/plugins/overview) — writing plugins with the `broccoli-plugin` base class
+- [`broccoli-node-info`](https://github.com/broccolijs/broccoli-node-info) — utility for reading a node's `nodeInfo` without accessing `__broccoliGetInfo__` directly
+- [`broccoli-source`](https://github.com/broccolijs/broccoli-source) — the standard implementation of source nodes

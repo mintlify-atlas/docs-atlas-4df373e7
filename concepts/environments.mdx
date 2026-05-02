@@ -1,0 +1,239 @@
+---
+title: 'Build environments: --environment, --prod, --dev'
+description: 'Broccoli passes env to your Brocfile via --environment, --prod, or --dev. Default is "development". Use it to apply conditional transforms.'
+keywords: ['environment', 'production', 'development', 'BrocfileOptions', '--prod', '--dev', 'build flags', 'conditional build']
+---
+
+Broccoli supports a single build-time environment string that your `Brocfile.js` can read to alter which transformations run. This is not a `.env` file system, a secret manager, or a runtime configuration loader — it is simply a string passed from the CLI into the function your Brocfile exports. By default the string is `"development"`.
+
+## How environments work
+
+When you run `broccoli build` or `broccoli serve`, the CLI constructs a `BrocfileOptions` object and passes it to the function exported from your `Brocfile.js`:
+
+```ts
+// lib/cli.ts – simplified
+function buildBrocfileOptions(options: { environment: string }) {
+  return {
+    env: options.environment,
+  };
+}
+
+// The brocfile function is called with { env: "development" } by default
+const builder = new Builder(brocfile(buildBrocfileOptions(options)));
+```
+
+Your Brocfile receives this as its first argument:
+
+```js
+export default (options) => {
+  // options.env === "development" unless overridden
+  let tree = new Funnel('app');
+  return tree;
+};
+```
+
+The environment value has no effect on anything Broccoli does internally — it is purely for your own conditional logic inside the Brocfile.
+
+## CLI flags
+
+<Tabs>
+  <Tab title="--environment">
+    The full flag accepts any string value. There is no enforced set of valid environment names.
+
+    ```bash
+    broccoli build --environment production
+    broccoli build --environment staging
+    broccoli serve -e production
+    ```
+
+    The short alias is `-e`:
+
+    ```bash
+    broccoli serve -e production
+    ```
+  </Tab>
+  <Tab title="--prod / --dev">
+    Two convenience aliases map to the standard strings:
+
+    ```bash
+    # Equivalent to --environment=production
+    broccoli build --prod
+
+    # Equivalent to --environment=development
+    broccoli serve --dev
+    ```
+
+    If both `--prod` and an explicit `--environment` flag are passed, `--prod` wins (the CLI checks `options.prod` first):
+
+    ```ts
+    // lib/cli.ts
+    if (options.prod) {
+      options.environment = 'production';
+    } else if (options.dev) {
+      options.environment = 'development';
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Default value
+
+If no environment flag is provided, `options.env` is `"development"`. This default is set by the Commander option definition in `cli.ts`:
+
+```ts
+.option('-e, --environment <environment>', 'build environment [development]', 'development')
+```
+
+<Info>
+The default of `"development"` applies to both `broccoli build` and `broccoli serve`. There is no automatic detection of CI environments or NODE_ENV — if you want CI to build in production mode, you must pass `--prod` or `--environment production` explicitly.
+</Info>
+
+## Using env in your Brocfile
+
+### Conditional transformations
+
+The most common pattern is to conditionally apply expensive or output-altering plugins only in production:
+
+<Tabs>
+  <Tab title="JavaScript">
+    ```js
+    // Brocfile.js
+    import Funnel from 'broccoli-funnel';
+    import UglifyJs from 'broccoli-uglify-sourcemap';
+
+    export default (options) => {
+      let js = new Funnel('app', {
+        include: ['**/*.js'],
+        destDir: 'assets',
+        annotation: 'App JS',
+      });
+
+      // Only minify in production
+      if (options.env === 'production') {
+        js = new UglifyJs(js, { annotation: 'Minify JS' });
+      }
+
+      return js;
+    };
+    ```
+  </Tab>
+  <Tab title="TypeScript">
+    ```ts
+    // Brocfile.ts
+    import { BrocfileOptions } from 'broccoli';
+    import Funnel from 'broccoli-funnel';
+    import UglifyJs from 'broccoli-uglify-sourcemap';
+
+    export default (options: BrocfileOptions) => {
+      let js = new Funnel('app', {
+        include: ['**/*.js'],
+        destDir: 'assets',
+        annotation: 'App JS',
+      });
+
+      if (options.env === 'production') {
+        js = new UglifyJs(js, { annotation: 'Minify JS' });
+      }
+
+      return js;
+    };
+    ```
+  </Tab>
+</Tabs>
+
+Broccoli supports `Brocfile.ts` natively through [ts-node](https://www.npmjs.com/package/ts-node). The `BrocfileOptions` type is exported from the `broccoli` package and provides full type information for `options.env`.
+
+### Branching on multiple environments
+
+You are not limited to `"production"` and `"development"`. Any string is valid, including custom environments like `"staging"` or `"test"`:
+
+```js
+export default (options) => {
+  let tree = new Funnel('app');
+
+  if (options.env === 'production') {
+    tree = minify(tree);
+    tree = fingerprint(tree);
+  } else if (options.env === 'staging') {
+    tree = fingerprint(tree);  // fingerprint but don't minify
+  }
+  // development: neither minify nor fingerprint
+
+  return tree;
+};
+```
+
+### Source maps example
+
+A common real-world use: include source maps only in non-production builds to keep production bundle sizes small.
+
+```js
+export default (options) => {
+  const isProd = options.env === 'production';
+
+  const js = new UglifyJs(appJs, {
+    sourceMapConfig: {
+      enabled: !isProd,
+    },
+  });
+
+  return new MergeTrees([js, css, html]);
+};
+```
+
+## What environments are not
+
+<Warning>
+The environment string is **not** a `.env` file loader. Broccoli does not read `.env`, `.env.production`, or any dotenv-style file automatically. If you need to inject runtime secrets or backend connection strings, use a separate package like [dotenv](https://www.npmjs.com/package/dotenv) and call `require('dotenv').config()` at the top of your Brocfile.
+</Warning>
+
+The environment string is also not:
+
+- **Validated against a schema** — any string is accepted; typos silently become a new environment name.
+- **A runtime value** — it affects only which nodes are assembled during `Brocfile.js` execution, not what your compiled output does at runtime.
+- **NODE_ENV** — Broccoli does not read or set `process.env.NODE_ENV` based on `options.env`. If your plugins rely on `NODE_ENV`, set it separately in your build scripts.
+
+<Tip>
+It is a common convention to mirror `options.env` into `process.env.NODE_ENV` at the top of your Brocfile so that plugins which read `NODE_ENV` behave consistently:
+
+```js
+export default (options) => {
+  process.env.NODE_ENV = options.env;
+  // rest of your pipeline
+};
+```
+</Tip>
+
+## TypeScript: importing BrocfileOptions
+
+The `broccoli` package ships a type declaration for `BrocfileOptions` at `lib/index.d.ts`. Import it to get type checking on the options object:
+
+```ts
+import { BrocfileOptions } from 'broccoli';
+
+export default (options: BrocfileOptions) => {
+  // options.env is typed as string
+};
+```
+
+When using CommonJS modules in a TypeScript Brocfile (e.g., importing a plugin that uses `module.exports`), use the TypeScript CommonJS import syntax:
+
+```ts
+import { BrocfileOptions } from 'broccoli';
+import Funnel = require('broccoli-funnel');
+
+export = (options: BrocfileOptions) => {
+  return new Funnel('app', { destDir: 'appkit' });
+};
+```
+
+## Further reading
+
+<Columns cols={2}>
+  <Card title="Plugins" icon="puzzle-piece" href="/concepts/plugins">
+    Learn which plugins to apply conditionally based on environment.
+  </Card>
+  <Card title="Build graph" icon="sitemap" href="/concepts/build-graph">
+    Understand how the Builder processes the node graph your Brocfile assembles.
+  </Card>
+</Columns>

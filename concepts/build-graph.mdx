@@ -1,0 +1,186 @@
+---
+title: 'Understanding the Broccoli Build Graph (DAG)'
+description: 'Broccoli uses a DAG of nodes where each node rebuilds only when inputs change, enabling constant-time incremental rebuilds at any project scale.'
+keywords: ['build graph', 'DAG', 'directed acyclic graph', 'Builder', 'topological order', 'constant-time rebuilds']
+---
+
+Broccoli represents your entire asset pipeline as a **directed acyclic graph (DAG)** of nodes. Each node is either a source directory on disk or a transformation that reads from one or more input nodes and writes to an output directory. The `Builder` class is the engine that traverses this graph, runs each node in the correct order, and ultimately produces your build artifact.
+
+## What is the build graph?
+
+When you construct a pipeline in `Brocfile.js`, you are describing a graph — not executing a build. Each `new Funnel(...)`, `new MergeTrees(...)`, or other plugin call creates a node object and records which other nodes feed into it. No files are read or written until `builder.build()` is called.
+
+The graph is **directed**: edges flow from input nodes toward the final output node. It is **acyclic**: the Builder detects cycles at construction time and throws a `BuilderError` immediately rather than spinning forever.
+
+```
+Source node: app/          Source node: styles/
+       │                          │
+       ▼                          ▼
+  Funnel (JS Files)        Funnel (CSS Files)
+       │                          │
+       └─────────┬────────────────┘
+                 ▼
+          MergeTrees (final output)
+```
+
+The node at the bottom — the one you pass to `new Builder(outputNode)` — is the **output node**. The Builder walks backwards from it, discovering all upstream nodes, and stores them in topological order so that every node is processed only after all its inputs are ready.
+
+## How Builder traverses the graph
+
+The `Builder` constructor calls `makeNodeWrapper` recursively, starting from the output node and descending into each node's `inputNodes`. It populates an internal `Map` (`_nodeWrappers`) in **topological order**, meaning each wrapper appears after all its dependencies:
+
+```js
+// builder.ts – simplified
+makeNodeWrapper(node, _stack = []) {
+  // Return cached wrapper if already visited (shared inputs are deduplicated)
+  const wrapper = this._nodeWrappers.get(node);
+  if (wrapper !== undefined) return wrapper;
+
+  // For transform nodes, recurse into inputs first
+  if (nodeInfo.nodeType === 'transform') {
+    inputNodeWrappers = nodeInfo.inputNodes.map(inputNode =>
+      this.makeNodeWrapper(inputNode, newStack)
+    );
+  }
+
+  // Register *after* all inputs — ensuring topological order
+  this._nodeWrappers.set(nodeWrapper.originalNode, nodeWrapper);
+  return nodeWrapper;
+}
+```
+
+During `builder.build()`, the Builder iterates over `_nodeWrappers` in insertion order and builds each node sequentially as a promise chain. Because the map is in topological order, a node's `outputPath` is always populated before any downstream node reads from it as an `inputPath`.
+
+<Note>
+The Builder also performs cycle detection during graph construction. If node A depends on node B which depends on node A, a `BuilderError` is thrown with a message like `"Cycle in node graph: NodeA -> NodeB -> NodeA"`. This check runs at startup, not during the build loop.
+</Note>
+
+## Constant-time rebuilds
+
+Broccoli's headline promise is **constant-time rebuilds**: no matter how large your project, only the nodes whose inputs have actually changed are re-executed.
+
+Each `TransformNodeWrapper` maintains a `WeakMap` from input node wrappers to their last-known **revision number**. Every time a node completes a build, it increments its revision counter via `revise()`. On subsequent builds, `shouldBuild()` compares the stored revision against the current one:
+
+```ts
+// transform-node.ts – shouldBuild logic
+shouldBuild() {
+  const nodesThatChanged: any[] = [];
+  this.inputNodeWrappers.forEach(wrapper => {
+    const meta = this.inputRevisions.get(wrapper);
+    if (!meta || meta.revision !== wrapper.revision) {
+      nodesThatChanged.push(wrapper.id);
+      this.inputRevisions.set(wrapper, { revision: wrapper.revision, changed: true });
+    }
+  });
+
+  if (nodesThatChanged.length > 0) return true;
+  return false;
+}
+```
+
+If no inputs changed, `build()` returns immediately without touching the filesystem. The Builder logs how many nodes were skipped after each build:
+
+```
+Total nodes skipped: 14 out of 17
+```
+
+<Tip>
+Memoization (skipping unchanged nodes) is currently opt-in. Set the environment variable `BROCCOLI_ENABLED_MEMOIZE=true` to activate it. Without this flag, every node runs on every rebuild regardless of whether its inputs changed.
+</Tip>
+
+## Temporary directories per node
+
+At construction time, `setupTmpDirs()` creates two temporary directories for every transform node inside a single top-level temp folder (e.g., `/tmp/broccoli-9rLfJh/`):
+
+| Directory pattern | Purpose |
+|---|---|
+| `out-NNN-plugin_name/` | Output written by the node during `build()` |
+| `cache-NNN-plugin_name/` | Persistent cache surviving across rebuilds (optional) |
+
+Where `NNN` is the zero-padded node ID and `plugin_name` is a slugified version of the plugin name and annotation. For example:
+
+```
+/tmp/broccoli-9rLfJh/
+  out-001-funnel_js_files/
+  cache-001-funnel_js_files/
+  out-002-funnel_css_files/
+  cache-002-funnel_css_files/
+  out-003-merge_trees_final_output/
+  cache-003-merge_trees_final_output/
+```
+
+Source nodes do not get temp directories — their `outputPath` is simply the source directory path on disk.
+
+The `outputPath` of each node wrapper is passed as an `inputPath` to all nodes that consume it, creating a chain where each transform reads from a previous transform's output directory.
+
+<Info>
+The top-level temp folder is created with `tmp.setGracefulCleanup()`, which registers an `uncaughtException` handler to remove all temporary directories if the process crashes unexpectedly. Call `builder.cleanup()` in your own code to clean up on normal exit.
+</Info>
+
+## Heimdall timing integration
+
+Broccoli integrates with [heimdalljs](https://github.com/heimdalljs/heimdalljs-lib) to record per-node build timing. The Builder emits `beginNode` and `endNode` events around each node's `build()` call, and the Heimdall event hooks attach a timing cookie:
+
+```ts
+// builder.ts – setupHeimdall
+this.on('beginNode', node => {
+  node['__heimdall_cookie__'] = heimdall.start({
+    name,
+    label: node.label,
+    broccoliNode: true,
+    broccoliId: node.id,
+    broccoliPluginName: node.nodeInfo.name,
+  });
+});
+
+this.on('endNode', node => {
+  node.__heimdall_cookie__.stop();
+});
+```
+
+After each build, `buildHeimdallTree()` re-parents Heimdall nodes to mirror the build graph structure and runs `aggregateTime()` to roll up self-time into total-time across the graph. This data can be consumed by profiling tools such as [heimdall-query](https://github.com/heimdalljs/heimdall-query).
+
+## Constructing a Builder programmatically
+
+The `Builder` API is the same whether you use `Brocfile.js` or call it directly from Node.js code:
+
+```js
+const { Builder } = require('broccoli');
+const Funnel = require('broccoli-funnel');
+const MergeTrees = require('broccoli-merge-trees');
+const TreeSync = require('tree-sync');
+
+// 1. Describe the graph (no I/O yet)
+const html  = new Funnel(appRoot, { files: ['index.html'], annotation: 'Index file' });
+const js    = new Funnel(appRoot, { files: ['app.js'], destDir: '/assets', annotation: 'JS Files' });
+const css   = new Funnel(appRoot, { srcDir: 'styles', files: ['app.css'], destDir: '/assets', annotation: 'CSS Files' });
+const tree  = new MergeTrees([html, js, css]);
+
+// 2. Construct the Builder — this traverses the graph and creates temp dirs
+const builder = new Builder(tree);
+const outputTree = new TreeSync(builder.outputPath, 'dist');
+
+// 3. Run the build, sync output, then clean up
+builder.build()
+  .then(() => outputTree.sync())
+  .then(() => builder.cleanup())
+  .catch(err => {
+    console.error(err);
+    return builder.cleanup();
+  });
+```
+
+<Warning>
+Always call `builder.cleanup()` in both the success and error paths. It removes the temporary directories created during construction. Failing to do so will leave behind `broccoli-*` directories in your system temp folder.
+</Warning>
+
+## Further reading
+
+<Columns cols={2}>
+  <Card title="Nodes and trees" icon="diagram-project" href="/concepts/nodes-and-trees">
+    Understand source nodes, transform nodes, and the nodeInfo contract.
+  </Card>
+  <Card title="Plugins" icon="puzzle-piece" href="/concepts/plugins">
+    Learn how plugins plug into the build graph via broccoli-plugin.
+  </Card>
+</Columns>

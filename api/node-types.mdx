@@ -1,0 +1,211 @@
+---
+title: "Node Types – Broccoli TypeScript Interfaces"
+description: "TypeScript interfaces used by Broccoli: BrocfileOptions, BuilderOptions, WatcherOptions, ServeOptions, BuildOptions, and node wrapper classes."
+---
+
+Broccoli ships type declarations for every public-facing interface. The primary
+type export lives in `lib/index.d.ts`, with additional interfaces defined inline
+in `builder.ts`, `watcher.ts`, and `cli.ts`. All types can be imported directly
+from the broccoli package in TypeScript projects.
+
+```ts
+import type { BrocfileOptions } from 'broccoli';
+// or with require:
+const broccoli = require('broccoli');
+```
+
+## `BrocfileOptions`
+
+Passed by the CLI to your `Brocfile` function on every build invocation.
+Defined in `lib/index.d.ts` and re-exported from the package root.
+
+<ParamField path="env" type="string" required>
+  The current build environment. Set by `--environment`, `--prod`, or `--dev`
+  on the CLI. **Default: `"development"`**. Use this to conditionally activate
+  plugins or change build behaviour (e.g. minification in production).
+</ParamField>
+
+## `BuilderOptions`
+
+Passed as the second argument to `new Builder(outputNode, options)`.
+
+<ParamField path="tmpdir" type="string | null">
+  Override the directory where Broccoli creates its temporary `out-*` and
+  `cache-*` subdirectories. When `null` or omitted, the OS default temp
+  directory is used (resolved via the `tmp` package).
+</ParamField>
+
+## `WatcherOptions`
+
+Passed as the third argument to `new Watcher(builder, watchedNodes, options)`.
+
+<ParamField path="debounce" type="number">
+  Milliseconds to wait after the first change event before scheduling a rebuild.
+  Coalesces rapid file changes into a single build cycle. **Default: `100`**.
+</ParamField>
+
+<ParamField path="watcherAdapter" type="WatcherAdapter">
+  Replace the default sane-backed `WatcherAdapter` with a custom implementation.
+  Must implement the `WatcherAdapter` interface (extend `EventEmitter`, expose
+  `watch()` and `quit()` methods).
+</ParamField>
+
+<ParamField path="saneOptions" type="sane.Options">
+  Options forwarded directly to the `sane` file-watching library. The most
+  commonly used keys are `poll` (boolean), `watchman` (boolean), and
+  `node` (boolean) to select the backend.
+</ParamField>
+
+<ParamField path="ignored" type="string[]">
+  Absolute paths that should be excluded from watching, even when they are
+  nested inside a watched source directory. Useful for ignoring output
+  directories that sit inside the project root.
+</ParamField>
+
+## `ServeOptions`
+
+Options recognised by the `broccoli serve` command (see `cli.ts`). Used
+internally by the CLI action handler.
+
+<ParamField path="host" type="string" required>
+  Hostname to bind the development server to. **Default: `"localhost"`**.
+</ParamField>
+
+<ParamField path="port" type="string" required>
+  Port number as a string. Converted to a number via `parseInt` before use.
+  **Default: `"4200"`**.
+</ParamField>
+
+<ParamField path="ssl" type="boolean">
+  Enable HTTPS. Requires `sslKey` and `sslCert` to be present on disk.
+  **Default: `false`**.
+</ParamField>
+
+<ParamField path="sslKey" type="string">
+  Path to the SSL private key file. **Default: `"ssl/server.key"`**.
+</ParamField>
+
+<ParamField path="sslCert" type="string">
+  Path to the SSL certificate file. **Default: `"ssl/server.crt"`**.
+</ParamField>
+
+<ParamField path="brocfilePath" type="string">
+  Override the path to the Brocfile. When omitted, Broccoli searches for
+  `Brocfile.js`, `Brocfile.ts`, etc. in the current working directory.
+</ParamField>
+
+<ParamField path="outputPath" type="string">
+  If provided, the build output is synced to this path in addition to the
+  internal temporary output directory.
+</ParamField>
+
+<ParamField path="cwd" type="string">
+  Override the working directory from which Broccoli resolves paths. Defaults
+  to `process.cwd()`.
+</ParamField>
+
+<ParamField path="environment" type="string" required>
+  Build environment string forwarded to the Brocfile as `BrocfileOptions.env`.
+  **Default: `"development"`**.
+</ParamField>
+
+<ParamField path="prod" type="boolean">
+  Shorthand for `environment = "production"`. Setting this overrides
+  `--environment`.
+</ParamField>
+
+<ParamField path="dev" type="boolean">
+  Shorthand for `environment = "development"`. Setting this overrides
+  `--environment`.
+</ParamField>
+
+<ParamField path="noWatch" type="boolean">
+  Disable the file watcher. When `true`, the server performs a single build
+  and stops watching for changes.
+</ParamField>
+
+<ParamField path="watcher" type="string">
+  Select the sane backend explicitly: `"watchman"`, `"polling"`, or `"node"`.
+  When omitted, `WatchDetector` picks the best available backend.
+</ParamField>
+
+## `BuildOptions`
+
+Options recognised by the `broccoli build` command.
+
+<ParamField path="brocfilePath" type="string">
+  Path to the Brocfile. Defaults to auto-discovery in `cwd`.
+</ParamField>
+
+<ParamField path="outputPath" type="string">
+  Destination directory for build output. Also settable as a positional
+  argument. **Default: `"dist"`**.
+</ParamField>
+
+<ParamField path="cwd" type="string">
+  Working directory for path resolution. Defaults to `process.cwd()`.
+</ParamField>
+
+<ParamField path="watch" type="boolean">
+  Keep the watcher running after the initial build. Mirrors `--watch` on the
+  CLI. **Default: `false`**.
+</ParamField>
+
+<ParamField path="watcher" type="string">
+  Sane backend override (`"watchman"`, `"polling"`, `"node"`).
+</ParamField>
+
+<ParamField path="environment" type="string" required>
+  Build environment string. **Default: `"development"`**.
+</ParamField>
+
+<ParamField path="prod" type="boolean">
+  Alias for `environment = "production"`.
+</ParamField>
+
+<ParamField path="dev" type="boolean">
+  Alias for `environment = "development"`.
+</ParamField>
+
+## Node Wrapper Classes
+
+These classes are exposed as static properties on `Builder` and are used
+internally to represent each node in the build graph.
+
+### `TransformNodeWrapper`
+
+Wraps a transform node (a plugin with inputs). Key properties:
+
+<ResponseField name="inputPaths" type="string[]">
+  Absolute paths to the output directories of this node's input nodes. Passed
+  to the plugin as its read-from locations.
+</ResponseField>
+
+<ResponseField name="outputPath" type="string">
+  Absolute path to the temporary directory where this node should write its
+  output (e.g. `/tmp/broccoli-xyz/out-001-funnel/`).
+</ResponseField>
+
+<ResponseField name="cachePath" type="string | undefined">
+  Absolute path to a persistent-across-builds cache directory, present only
+  when `nodeInfo.needsCache` is `true`.
+</ResponseField>
+
+<ResponseField name="inputNodeWrappers" type="NodeWrapper[]">
+  The wrappers for this node's input nodes, in declaration order.
+</ResponseField>
+
+### `SourceNodeWrapper`
+
+Wraps a source node (a watched or unwatched directory). Key properties:
+
+<ResponseField name="outputPath" type="string">
+  The absolute path of the source directory. Aliased as `outputPath` so that
+  transform nodes can reference it uniformly alongside temporary output
+  directories.
+</ResponseField>
+
+<ResponseField name="nodeInfo.watched" type="boolean">
+  Whether this source directory is watched for changes. Unwatched source nodes
+  are not passed to the `WatcherAdapter`.
+</ResponseField>

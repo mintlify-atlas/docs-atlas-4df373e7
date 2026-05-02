@@ -1,0 +1,189 @@
+---
+title: "Server – Broccoli Development HTTP Server"
+description: "serve() function and Server class reference: host, port, SSL params, buildSuccess/buildFailure events, and usage examples."
+---
+
+The `server` module exposes a `serve()` convenience function and the underlying
+`Server` class that powers `broccoli serve`. It wraps a `Watcher` in a Connect
+middleware application, serves the builder's `outputPath` over HTTP (or HTTPS),
+and prints build-status messages to the terminal. Both `Server` and `serve` are
+exported from the `broccoli` package under `broccoli.server`.
+
+```ts
+import broccoli = require('broccoli');
+const { serve, Server } = broccoli.server;
+```
+
+<Warning>
+  The development server is **not designed for production use**. It has no
+  authentication, rate limiting, or security hardening. Only bind it to
+  `localhost` (the default) and use it exclusively during local development.
+</Warning>
+
+## `serve()` function
+
+```ts
+function serve(
+  watcher: Watcher,
+  host: string,
+  port: string | number,
+  _connect?: ConnectApp,
+  _process?: NodeJS.Process,
+  ui?: UI,
+  ssl?: boolean,
+  sslKey?: string,
+  sslCert?: string
+): Promise<void>
+```
+
+Creates a `Server` instance, starts it, and then terminates the process with
+`process.exit()` once the server stops. This matches the behaviour expected by
+the `broccoli serve` CLI command. If you need to control the process lifecycle
+yourself, instantiate `Server` directly.
+
+<ParamField path="watcher" type="Watcher" required>
+  A `Watcher` instance that has **not** yet been started. The server calls
+  `watcher.start()` internally after the HTTP listener is bound. The server also
+  reads `watcher.builder` to access build output and print success messages.
+</ParamField>
+
+<ParamField path="host" type="string" required>
+  Hostname or IP address to bind to (e.g. `"localhost"` or `"0.0.0.0"`).
+</ParamField>
+
+<ParamField path="port" type="string | number" required>
+  Port number to listen on (e.g. `4200`). Passed as a string from the CLI;
+  the constructor converts it with `parseInt`.
+</ParamField>
+
+<ParamField path="ui" type="UI">
+  A `console-ui` instance used to write status messages and errors to the
+  terminal. When omitted a default UI is used.
+</ParamField>
+
+<ParamField path="ssl" type="boolean">
+  When `true`, an HTTPS server is created instead of HTTP. Requires `sslKey`
+  and `sslCert`. **Default: `false`**.
+</ParamField>
+
+<ParamField path="sslKey" type="string">
+  Path to the PEM-encoded SSL private key file, resolved relative to
+  `process.cwd()`. **Default: `"ssl/server.key"`**.
+</ParamField>
+
+<ParamField path="sslCert" type="string">
+  Path to the PEM-encoded SSL certificate file, resolved relative to
+  `process.cwd()`. **Default: `"ssl/server.crt"`**.
+</ParamField>
+
+## `Server` class
+
+```ts
+new Server(
+  watcher: Watcher,
+  host: string,
+  port: string,
+  connect?: ConnectApp,
+  ui?: UI,
+  ssl?: boolean,
+  sslKey?: string,
+  sslCert?: string
+)
+```
+
+The `Server` class extends `EventEmitter`. Construct it when you need lifecycle
+control (e.g. integration tests) without relying on `process.exit()`.
+
+### `server.start()`
+
+```ts
+async start(): Promise<void>
+```
+
+Binds the HTTP(S) listener, starts the `Watcher`, and keeps the server running
+until `stop()` is called or a fatal error occurs. When the watcher stops, the
+server calls `stop()` automatically. Registers `SIGINT` and `SIGTERM` handlers
+that call `stop()` to ensure clean shutdown.
+
+### `server.stop()`
+
+```ts
+async stop(): Promise<void>
+```
+
+Closes the HTTP(S) listener, detaches signal handlers, calls `watcher.quit()`,
+and awaits `builder.cleanup()`. Called automatically on `SIGINT` / `SIGTERM`.
+
+## Server Events
+
+The `Server` class extends `EventEmitter` and re-emits two events from the
+underlying `Watcher`.
+
+| Event | Payload | Description |
+|---|---|---|
+| `buildSuccess` | — | Re-emitted after each successful build. Also triggers a success message via `ui`. |
+| `buildFailure` | — | Re-emitted after each failed build. Also writes the error to `ui`. |
+
+## SSL Setup
+
+<Tip>
+  For local HTTPS development, generate a self-signed certificate with:
+
+  ```bash
+  mkdir ssl
+  openssl req -x509 -newkey rsa:2048 -keyout ssl/server.key \
+    -out ssl/server.crt -days 365 -nodes \
+    -subj '/CN=localhost'
+  ```
+
+  Then start the server with `--ssl` and accept the browser's security warning.
+</Tip>
+
+## Usage Example
+
+<CodeGroup>
+  ```ts Direct Server usage (TypeScript)
+  import broccoli = require('broccoli');
+  import Funnel = require('broccoli-funnel');
+
+  const { Builder, Watcher } = broccoli;
+  const { Server } = broccoli.server;
+
+  const tree = new Funnel('public');
+  const builder = new Builder(tree);
+  const watcher = new Watcher(builder, builder.watchedSourceNodeWrappers);
+
+  const server = new Server(watcher, 'localhost', '4200');
+
+  server.on('buildSuccess', () => console.log('Rebuilt successfully'));
+  server.on('buildFailure', () => console.error('Build failed'));
+
+  await server.start();
+  ```
+
+  ```ts HTTPS server (TypeScript)
+  import broccoli = require('broccoli');
+  import Funnel = require('broccoli-funnel');
+
+  const { Builder, Watcher } = broccoli;
+  const { Server } = broccoli.server;
+
+  const tree = new Funnel('public');
+  const builder = new Builder(tree);
+  const watcher = new Watcher(builder, builder.watchedSourceNodeWrappers);
+
+  const server = new Server(
+    watcher,
+    'localhost',
+    '4200',
+    undefined,   // default connect
+    undefined,   // default ui
+    true,        // ssl
+    'ssl/server.key',
+    'ssl/server.crt'
+  );
+
+  await server.start();
+  // Serves at https://localhost:4200
+  ```
+</CodeGroup>
